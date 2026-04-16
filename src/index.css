@@ -1,0 +1,78 @@
+@import "tailwindcss";
+
+:root {
+  --bg-primary: #0f0f0f;
+  --bg-secondary: #141415;
+  --bg-tertiary: #1a1a1c;
+  --bg-elevated: #232326;
+
+  --text-primary: #f2f2f5;
+  --text-secondary: #a1a1aa;
+  --text-tertiary: #71717a;
+  --text-muted: #52525b;
+
+  --accent: oklch(0.75 0.15 220);
+  --accent-dim: oklch(0.65 0.12 220);
+  --accent-glow: oklch(0.75 0.15 220 / 0.25);
+  --accent-subtle: oklch(0.75 0.08 220 / 0.12);
+
+  --success: oklch(0.7 0.14 150);
+  --warning: oklch(0.75 0.12 85);
+  --error: oklch(0.65 0.2 25);
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --shadow-glow: 0 0 24px var(--accent-glow);
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100svh;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-primary);
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+@layer utilities {
+  .transition-micro {
+    transition-duration: 150ms;
+    transition-timing-function: var(--ease-out-expo);
+  }
+
+  .transition-ui {
+    transition-duration: 300ms;
+    transition-timing-function: var(--ease-out-expo);
+  }
+}
