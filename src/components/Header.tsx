@@ -409,7 +409,7 @@ export function Header({
             rel="noreferrer"
             className="shrink-0 text-xs text-[var(--text-tertiary)] transition-micro hover:text-[var(--accent)] hover:underline"
           >
-            Host your own
+            Someone else&apos;s home node. Host yours
           </a>
         </div>
 
