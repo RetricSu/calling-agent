@@ -3,6 +3,8 @@ import { useFiberNode } from "@fiber-pay/react";
 import { Header } from "./components/Header";
 import { Chat } from "./components/Chat";
 
+const DEFAULT_AGENT_URL = "http://127.0.0.1:8402/";
+
 function App() {
   const {
     state,
@@ -19,6 +21,8 @@ function App() {
     network: "testnet",
   });
   const [isConnecting, setIsConnecting] = useState(false);
+  const [agentUrl, setAgentUrl] = useState(DEFAULT_AGENT_URL);
+  const [chatKey, setChatKey] = useState(0);
 
   const isStarting = isConnecting || state === "starting" || state === "unlocking";
   const isRunning = state === "running";
@@ -45,6 +49,11 @@ function App() {
     await stop();
   }
 
+  function handleAgentUrlChange(url: string) {
+    setAgentUrl(url);
+    setChatKey((k) => k + 1);
+  }
+
   return (
     <div className="flex min-h-svh flex-col bg-[var(--bg-primary)]">
       <Header
@@ -56,12 +65,14 @@ function App() {
         hasPasskeyConfigured={hasPasskeyConfigured}
         isStarting={isStarting}
         isRunning={isRunning}
+        agentUrl={agentUrl}
+        onAgentUrlChange={handleAgentUrlChange}
         onRegisterPasskey={handleRegisterPasskey}
         onConnectPasskey={handleConnectPasskey}
         onDisconnect={handleDisconnect}
       />
       <main className="flex flex-1 flex-col">
-        <Chat node={node} />
+        <Chat key={chatKey} node={node} agentUrl={agentUrl} />
       </main>
     </div>
   );

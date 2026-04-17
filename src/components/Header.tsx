@@ -87,6 +87,8 @@ interface HeaderProps {
   hasPasskeyConfigured: boolean;
   isStarting: boolean;
   isRunning: boolean;
+  agentUrl: string;
+  onAgentUrlChange: (url: string) => void;
   onRegisterPasskey: () => void;
   onConnectPasskey: () => void;
   onDisconnect: () => void;
@@ -101,6 +103,8 @@ export function Header({
   hasPasskeyConfigured,
   isStarting,
   isRunning,
+  agentUrl,
+  onAgentUrlChange,
   onRegisterPasskey,
   onConnectPasskey,
   onDisconnect,
@@ -364,6 +368,25 @@ export function Header({
           <span className="text-lg font-semibold tracking-tight text-[var(--text-primary)]">
             Calling Agent
           </span>
+        </div>
+
+        <div className="mx-4 hidden min-w-0 flex-1 items-center justify-center gap-2 md:flex">
+          <span className="shrink-0 text-xs text-[var(--text-secondary)]">Agent URL</span>
+          <input
+            type="text"
+            value={agentUrl}
+            onChange={(e) => onAgentUrlChange(e.target.value)}
+            placeholder="https://..."
+            className="w-full max-w-[220px] rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none transition-micro focus:border-[var(--accent-dim)]"
+          />
+          <a
+            href="https://github.com/RetricSu/fiber-pay/blob/feat/agent-boxlite-sandbox/docs/boxlite-agent-setup.md"
+            target="_blank"
+            rel="noreferrer"
+            className="shrink-0 text-xs text-[var(--text-tertiary)] transition-micro hover:text-[var(--accent)] hover:underline"
+          >
+            Host your own
+          </a>
         </div>
 
         <div className="relative flex items-center gap-3">

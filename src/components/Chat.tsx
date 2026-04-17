@@ -7,17 +7,17 @@ type Message = {
   content: string;
 };
 
-const AGENT_URL = import.meta.env.VITE_AGENT_URL || "http://127.0.0.1:8402/";
 const STORAGE_KEY = "agentSessionId";
 
 const quickActions = [
-  "Check Fiber balance",
-  "Send a payment",
-  "List channels",
+  "Build a landing page for my project",
+  "Debug this TypeScript error",
+  "Write a product announcement tweet",
 ];
 
 interface ChatProps {
   node: FiberBrowserNode | null;
+  agentUrl: string;
 }
 
 async function callAgent(
@@ -148,7 +148,7 @@ function ToolBlock({ value }: { value: string }) {
   );
 }
 
-export function Chat({ node }: ChatProps) {
+export function Chat({ node, agentUrl }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -204,7 +204,7 @@ export function Chat({ node }: ChatProps) {
         return;
       }
 
-      const result = await callAgent(AGENT_URL, content, sessionId, node, (status) => {
+      const result = await callAgent(agentUrl, content, sessionId, node, (status) => {
         setStatusLabel(status);
       });
 
@@ -262,8 +262,16 @@ export function Chat({ node }: ChatProps) {
                 What would you like me to do?
               </h1>
               <p className="max-w-md text-[var(--text-secondary)]">
-                Ask me anything about your Fiber node, payments, or channels.
+                A crowdsourced agent marketplace. Connect to any hosted service, pay over L402, and get work done. No platform lock-in.
               </p>
+              <a
+                href="https://github.com/RetricSu/fiber-pay/blob/feat/agent-boxlite-sandbox/docs/boxlite-agent-setup.md"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs font-medium text-[var(--accent)] transition-micro hover:text-[var(--accent-dim)] hover:underline"
+              >
+                Host your own agent →
+              </a>
               <div className="mt-2 flex flex-wrap items-center justify-center gap-3">
                 {quickActions.map((action) => (
                   <button
@@ -365,7 +373,7 @@ export function Chat({ node }: ChatProps) {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type a message..."
+              placeholder="Describe the task you want the agent to complete..."
               className="flex-1 rounded-xl border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-4 py-3 text-[15px] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none transition-micro focus:border-[var(--accent-dim)] focus:ring-1 focus:ring-[var(--accent-glow)]"
             />
             <button
