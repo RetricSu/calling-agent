@@ -317,7 +317,7 @@ export function Header({
     buttonContent = "Passkey unavailable";
     buttonDisabled = true;
   } else if (!hasPasskeyConfigured) {
-    buttonContent = "Register Passkey";
+    buttonContent = "Connect via Passkey";
     buttonOnClick = onRegisterPasskey;
   } else {
     buttonContent = "Connect with Passkey";
