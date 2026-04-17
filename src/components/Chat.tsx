@@ -5,6 +5,8 @@ type Message = {
   id: string;
   role: "user" | "agent" | "system";
   content: string;
+  stderr?: string;
+  stderrFirst?: boolean;
 };
 
 const STORAGE_KEY = "agentSessionId";
@@ -20,21 +22,198 @@ interface ChatProps {
   agentUrl: string;
 }
 
+type AgentResponse = {
+  response: string;
+  stderr?: string;
+  agent?: string;
+  durationMs?: number;
+  transport: "sse" | "json";
+  chunkCount?: number;
+  stdoutChunkCount?: number;
+  stderrChunkCount?: number;
+};
+
+type StreamChunk = {
+  type: "stdout" | "stderr";
+  text: string;
+};
+
+function getAgentRequestInit(
+  prompt: string,
+  sessionId: string,
+  extraHeaders?: Record<string, string>
+): RequestInit {
+  return {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...extraHeaders,
+    },
+    body: JSON.stringify({ prompt, sessionId, format: "json", stream: "sse" }),
+  };
+}
+
+async function readSseResponse(
+  response: Response,
+  onChunk: (chunk: StreamChunk) => void | Promise<void>,
+  onStatus: (text: string) => void
+): Promise<AgentResponse> {
+  if (!response.body) {
+    throw new Error("Agent stream is not readable");
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = "";
+  let output = "";
+  let stderrOutput = "";
+  let stdoutChunkCount = 0;
+  let stderrChunkCount = 0;
+  let sawDone = false;
+  let doneMeta: { agent?: string; durationMs?: number } = {};
+
+  onStatus("SSE connected, waiting for chunks...");
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      if (!frame.trim()) continue;
+
+      const lines = frame.split(/\r?\n/);
+      let event = "message";
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          event = line.slice(6).trim();
+          continue;
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+
+      if (dataLines.length === 0) continue;
+
+      const dataRaw = dataLines.join("\n");
+      let payload: unknown;
+
+      try {
+        payload = JSON.parse(dataRaw);
+      } catch {
+        continue;
+      }
+
+      if (event === "chunk") {
+        const chunkTypeRaw =
+          typeof payload === "object" &&
+          payload !== null &&
+          "type" in payload &&
+          typeof (payload as { type?: unknown }).type === "string"
+            ? (payload as { type: string }).type
+            : "stdout";
+        const chunkType: "stdout" | "stderr" =
+          chunkTypeRaw === "stderr" ? "stderr" : "stdout";
+
+        const text =
+          typeof payload === "object" &&
+          payload !== null &&
+          "text" in payload &&
+          typeof (payload as { text?: unknown }).text === "string"
+            ? (payload as { text: string }).text
+            : "";
+
+        if (text) {
+          if (chunkType === "stderr") {
+            stderrOutput += text;
+            stderrChunkCount += 1;
+          } else {
+            output += text;
+            stdoutChunkCount += 1;
+          }
+
+          await onChunk({ type: chunkType, text });
+          onStatus(
+            chunkType === "stderr"
+              ? "Agent is streaming (with warnings)..."
+              : "Agent is streaming..."
+          );
+        }
+      } else if (event === "done") {
+        const meta =
+          typeof payload === "object" && payload !== null
+            ? (payload as { agent?: unknown; durationMs?: unknown })
+            : {};
+        doneMeta = {
+          agent: typeof meta.agent === "string" ? meta.agent : undefined,
+          durationMs:
+            typeof meta.durationMs === "number" ? meta.durationMs : undefined,
+        };
+        sawDone = true;
+      } else if (event === "error") {
+        const message =
+          typeof payload === "object" &&
+          payload !== null &&
+          "message" in payload &&
+          typeof (payload as { message?: unknown }).message === "string"
+            ? (payload as { message: string }).message
+            : "Agent execution failed";
+        throw new Error(message);
+      }
+    }
+  }
+
+  if (!sawDone) {
+    throw new Error("Agent stream ended unexpectedly before done event");
+  }
+
+  return {
+    response: output,
+    stderr: stderrOutput || undefined,
+    agent: doneMeta.agent,
+    durationMs: doneMeta.durationMs,
+    transport: "sse",
+    chunkCount: stdoutChunkCount + stderrChunkCount,
+    stdoutChunkCount,
+    stderrChunkCount,
+  };
+}
+
+async function parseAgentResponse(
+  response: Response,
+  onChunk: (chunk: StreamChunk) => void | Promise<void>,
+  onStatus: (text: string) => void
+): Promise<AgentResponse> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("text/event-stream")) {
+    return await readSseResponse(response, onChunk, onStatus);
+  }
+
+  onStatus("Server returned JSON fallback");
+  const json = (await response.json()) as AgentResponse;
+  return { ...json, transport: "json" };
+}
+
 async function callAgent(
   url: string,
   prompt: string,
   sessionId: string,
   node: FiberBrowserNode,
-  onStatus: (text: string) => void
-): Promise<{ response: string; agent?: string; durationMs?: number }> {
-  const initial = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, sessionId }),
-  });
+  onStatus: (text: string) => void,
+  onChunk: (chunk: StreamChunk) => void | Promise<void>
+): Promise<AgentResponse> {
+  const initial = await fetch(url, getAgentRequestInit(prompt, sessionId));
 
   if (initial.ok) {
-    return await initial.json();
+    return await parseAgentResponse(initial, onChunk, onStatus);
   }
 
   if (initial.status === 402) {
@@ -56,21 +235,19 @@ async function callAgent(
     }
 
     onStatus("Agent is executing...");
-    const retry = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const retry = await fetch(
+      url,
+      getAgentRequestInit(prompt, sessionId, {
         Authorization: `L402 ${macaroon}`,
         "X-L402-Payment-Hash": payment.payment_hash,
-      },
-      body: JSON.stringify({ prompt, sessionId }),
-    });
+      })
+    );
 
     if (!retry.ok) {
       throw new Error(`Agent request failed after payment: ${retry.status}`);
     }
 
-    return await retry.json();
+    return await parseAgentResponse(retry, onChunk, onStatus);
   }
 
   throw new Error(`Agent request failed: ${initial.status}`);
@@ -188,6 +365,9 @@ export function Chat({ node, agentUrl }: ChatProps) {
     setIsTyping(true);
     setStatusLabel("Agent is reading...");
 
+    let agentMessageId: string | undefined;
+    let streamedChunk = false;
+
     try {
       if (!node) {
         setMessages((prev) => [
@@ -204,16 +384,59 @@ export function Chat({ node, agentUrl }: ChatProps) {
         return;
       }
 
-      const result = await callAgent(agentUrl, content, sessionId, node, (status) => {
-        setStatusLabel(status);
-      });
+      const result = await callAgent(
+        agentUrl,
+        content,
+        sessionId,
+        node,
+        (status) => {
+          setStatusLabel(status);
+        },
+        (chunk) => {
+          streamedChunk = true;
+          if (!agentMessageId) {
+            const createdAgentMessageId = crypto.randomUUID();
+            agentMessageId = createdAgentMessageId;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: createdAgentMessageId,
+                role: "agent",
+                content: chunk.type === "stdout" ? chunk.text : "",
+                stderr: chunk.type === "stderr" ? chunk.text : undefined,
+                  stderrFirst: chunk.type === "stderr",
+              },
+            ]);
+            return;
+          }
 
-      const agentMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "agent",
-        content: result.response,
-      };
-      setMessages((prev) => [...prev, agentMsg]);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === agentMessageId
+                ? chunk.type === "stderr"
+                  ? { ...msg, stderr: (msg.stderr ?? "") + chunk.text }
+                  : { ...msg, content: msg.content + chunk.text }
+                : msg
+            )
+          );
+        }
+      );
+
+      if (!streamedChunk) {
+        if (!result.response.trim() && !(result.stderr && result.stderr.trim())) {
+          return;
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "agent",
+            content: result.response,
+            stderr: result.stderr,
+          },
+        ]);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setMessages((prev) => [
@@ -296,32 +519,53 @@ export function Chat({ node, agentUrl }: ChatProps) {
                   >
                     {msg.role === "agent" ? (
                       <div className="flex flex-col gap-2">
-                        {formatAgentContent(msg.content).map((part, idx) => {
-                          if (part.type === "tool") {
-                            return <ToolBlock key={idx} value={part.value} />;
-                          }
-                          if (part.type === "tag") {
-                            return (
-                              <span
-                                key={idx}
-                                className="inline-block w-fit rounded-md bg-transparent px-2 py-0.5 text-[10px] text-[var(--text-muted)]/60"
-                              >
-                                {part.value}
-                              </span>
-                            );
-                          }
-                          if (part.type === "thinking") {
-                            return (
-                              <span
-                                key={idx}
-                                className="inline-block w-fit rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px] italic text-[var(--text-secondary)]"
-                              >
-                                Thinking...
-                              </span>
-                            );
-                          }
-                          return <p key={idx} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{part.value}</p>;
-                        })}
+                        {msg.stderrFirst && msg.stderr && msg.stderr.trim() && (
+                          <details className="rounded-lg border border-[var(--border-default)]/60 bg-[var(--bg-secondary)]/30 px-3 py-2">
+                            <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+                              stderr logs ({msg.stderr.split(/\r?\n/).filter(Boolean).length} lines)
+                            </summary>
+                            <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[var(--text-muted)]/90">
+                              {msg.stderr}
+                            </pre>
+                          </details>
+                        )}
+                        {msg.content.trim() &&
+                          formatAgentContent(msg.content).map((part, idx) => {
+                            if (part.type === "tool") {
+                              return <ToolBlock key={idx} value={part.value} />;
+                            }
+                            if (part.type === "tag") {
+                              return (
+                                <span
+                                  key={idx}
+                                  className="inline-block w-fit rounded-md bg-transparent px-2 py-0.5 text-[10px] text-[var(--text-muted)]/60"
+                                >
+                                  {part.value}
+                                </span>
+                              );
+                            }
+                            if (part.type === "thinking") {
+                              return (
+                                <span
+                                  key={idx}
+                                  className="inline-block w-fit rounded-md border border-[var(--border-default)] bg-[var(--bg-secondary)] px-2 py-0.5 text-[11px] italic text-[var(--text-secondary)]"
+                                >
+                                  Thinking...
+                                </span>
+                              );
+                            }
+                            return <p key={idx} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{part.value}</p>;
+                          })}
+                        {!msg.stderrFirst && msg.stderr && msg.stderr.trim() && (
+                          <details className="rounded-lg border border-[var(--border-default)]/60 bg-[var(--bg-secondary)]/30 px-3 py-2">
+                            <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+                              stderr logs ({msg.stderr.split(/\r?\n/).filter(Boolean).length} lines)
+                            </summary>
+                            <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[var(--text-muted)]/90">
+                              {msg.stderr}
+                            </pre>
+                          </details>
+                        )}
                       </div>
                     ) : (
                       msg.content
