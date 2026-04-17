@@ -20,21 +20,170 @@ interface ChatProps {
   agentUrl: string;
 }
 
+type AgentResponse = {
+  response: string;
+  agent?: string;
+  durationMs?: number;
+  transport: "sse" | "json";
+  chunkCount?: number;
+};
+
+function getAgentRequestInit(
+  prompt: string,
+  sessionId: string,
+  extraHeaders?: Record<string, string>
+): RequestInit {
+  return {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+      ...extraHeaders,
+    },
+    body: JSON.stringify({ prompt, sessionId, format: "json", stream: "sse" }),
+  };
+}
+
+async function readSseResponse(
+  response: Response,
+  onChunk: (text: string) => void | Promise<void>,
+  onStatus: (text: string) => void
+): Promise<AgentResponse> {
+  if (!response.body) {
+    throw new Error("Agent stream is not readable");
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = "";
+  let output = "";
+  let chunkCount = 0;
+  let sawDone = false;
+  let doneMeta: { agent?: string; durationMs?: number } = {};
+
+  onStatus("SSE connected, waiting for chunks...");
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() ?? "";
+
+    for (const frame of frames) {
+      if (!frame.trim()) continue;
+
+      const lines = frame.split(/\r?\n/);
+      let event = "message";
+      const dataLines: string[] = [];
+
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          event = line.slice(6).trim();
+          continue;
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+
+      if (dataLines.length === 0) continue;
+
+      const dataRaw = dataLines.join("\n");
+      let payload: unknown;
+
+      try {
+        payload = JSON.parse(dataRaw);
+      } catch {
+        continue;
+      }
+
+      if (event === "chunk") {
+        const text =
+          typeof payload === "object" &&
+          payload !== null &&
+          "text" in payload &&
+          typeof (payload as { text?: unknown }).text === "string"
+            ? (payload as { text: string }).text
+            : "";
+
+        if (text) {
+          chunkCount += 1;
+          output += text;
+          await onChunk(text);
+          onStatus("Agent is streaming...");
+
+          // Yield one frame so each chunk has a chance to paint.
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+        }
+      } else if (event === "done") {
+        const meta =
+          typeof payload === "object" && payload !== null
+            ? (payload as { agent?: unknown; durationMs?: unknown })
+            : {};
+        doneMeta = {
+          agent: typeof meta.agent === "string" ? meta.agent : undefined,
+          durationMs:
+            typeof meta.durationMs === "number" ? meta.durationMs : undefined,
+        };
+        sawDone = true;
+      } else if (event === "error") {
+        const message =
+          typeof payload === "object" &&
+          payload !== null &&
+          "message" in payload &&
+          typeof (payload as { message?: unknown }).message === "string"
+            ? (payload as { message: string }).message
+            : "Agent execution failed";
+        throw new Error(message);
+      }
+    }
+  }
+
+  if (!sawDone) {
+    throw new Error("Agent stream ended unexpectedly before done event");
+  }
+
+  return {
+    response: output,
+    agent: doneMeta.agent,
+    durationMs: doneMeta.durationMs,
+    transport: "sse",
+    chunkCount,
+  };
+}
+
+async function parseAgentResponse(
+  response: Response,
+  onChunk: (text: string) => void | Promise<void>,
+  onStatus: (text: string) => void
+): Promise<AgentResponse> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (contentType.includes("text/event-stream")) {
+    return await readSseResponse(response, onChunk, onStatus);
+  }
+
+  onStatus("Server returned JSON fallback");
+  const json = (await response.json()) as AgentResponse;
+  return { ...json, transport: "json" };
+}
+
 async function callAgent(
   url: string,
   prompt: string,
   sessionId: string,
   node: FiberBrowserNode,
-  onStatus: (text: string) => void
-): Promise<{ response: string; agent?: string; durationMs?: number }> {
-  const initial = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, sessionId }),
-  });
+  onStatus: (text: string) => void,
+  onChunk: (text: string) => void | Promise<void>
+): Promise<AgentResponse> {
+  const initial = await fetch(url, getAgentRequestInit(prompt, sessionId));
 
   if (initial.ok) {
-    return await initial.json();
+    return await parseAgentResponse(initial, onChunk, onStatus);
   }
 
   if (initial.status === 402) {
@@ -56,21 +205,19 @@ async function callAgent(
     }
 
     onStatus("Agent is executing...");
-    const retry = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const retry = await fetch(
+      url,
+      getAgentRequestInit(prompt, sessionId, {
         Authorization: `L402 ${macaroon}`,
         "X-L402-Payment-Hash": payment.payment_hash,
-      },
-      body: JSON.stringify({ prompt, sessionId }),
-    });
+      })
+    );
 
     if (!retry.ok) {
       throw new Error(`Agent request failed after payment: ${retry.status}`);
     }
 
-    return await retry.json();
+    return await parseAgentResponse(retry, onChunk, onStatus);
   }
 
   throw new Error(`Agent request failed: ${initial.status}`);
@@ -153,6 +300,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
+  const [lastDelivery, setLastDelivery] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(() => {
     if (typeof window === "undefined") return "";
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -173,6 +321,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
     setSessionId(id);
     setMessages([]);
     setInput("");
+    setLastDelivery(null);
   }
 
   async function sendMessage(content: string) {
@@ -187,6 +336,9 @@ export function Chat({ node, agentUrl }: ChatProps) {
     setInput("");
     setIsTyping(true);
     setStatusLabel("Agent is reading...");
+
+    let agentMessageId: string | undefined;
+    let streamedChunk = false;
 
     try {
       if (!node) {
@@ -204,16 +356,58 @@ export function Chat({ node, agentUrl }: ChatProps) {
         return;
       }
 
-      const result = await callAgent(agentUrl, content, sessionId, node, (status) => {
-        setStatusLabel(status);
-      });
+      const result = await callAgent(
+        agentUrl,
+        content,
+        sessionId,
+        node,
+        (status) => {
+          setStatusLabel(status);
+        },
+        (chunk) => {
+          streamedChunk = true;
+          if (!agentMessageId) {
+            const createdAgentMessageId = crypto.randomUUID();
+            agentMessageId = createdAgentMessageId;
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: createdAgentMessageId,
+                role: "agent",
+                content: chunk,
+              },
+            ]);
+            return;
+          }
 
-      const agentMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "agent",
-        content: result.response,
-      };
-      setMessages((prev) => [...prev, agentMsg]);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === agentMessageId ? { ...msg, content: msg.content + chunk } : msg
+            )
+          );
+        }
+      );
+
+      setLastDelivery(
+        result.transport === "sse"
+          ? `SSE${typeof result.chunkCount === "number" ? ` (${result.chunkCount} chunks)` : ""}`
+          : "JSON fallback"
+      );
+
+      if (!streamedChunk) {
+        if (!result.response.trim()) {
+          return;
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "agent",
+            content: result.response,
+          },
+        ]);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setMessages((prev) => [
@@ -352,9 +546,16 @@ export function Chat({ node, agentUrl }: ChatProps) {
 
         <div className="border-t border-[var(--border-default)] bg-[var(--bg-secondary)] px-6 py-4">
           <div className="mb-3 flex items-center justify-between">
-            <span className="text-[10px] text-[var(--text-muted)]">
-              Session: {sessionId.slice(0, 8)}…
-            </span>
+            <div className="flex flex-col">
+              <span className="text-[10px] text-[var(--text-muted)]">
+                Session: {sessionId.slice(0, 8)}…
+              </span>
+              {lastDelivery && (
+                <span className="text-[10px] text-[var(--text-tertiary)]">
+                  Transport: {lastDelivery}
+                </span>
+              )}
+            </div>
             <button
               onClick={startNewChat}
               className="text-[11px] font-medium text-[var(--text-secondary)] transition-micro hover:text-[var(--accent)]"
