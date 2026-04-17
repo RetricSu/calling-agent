@@ -4,7 +4,7 @@ import { Fiber } from "@nervosnetwork/fiber-js";
 import { Header } from "./components/Header";
 import { Chat } from "./components/Chat";
 
-const DEFAULT_AGENT_URL = "http://127.0.0.1:8402/";
+const DEFAULT_AGENT_URL = "https://agent.pingkey.xyz/";
 
 function App() {
   const {
