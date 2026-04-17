@@ -524,7 +524,7 @@ export function Header({
                   <div className="mt-3 border-t border-[var(--border-default)] pt-2">
                     <button
                       onClick={handleDisconnect}
-                      className="group flex w-full items-center justify-between rounded-lg border border-[var(--error)]/35 bg-[var(--error)]/8 px-3 py-2 text-left text-sm font-medium text-[var(--error)] transition-micro hover:bg-[var(--error)]/14"
+                      className="group flex w-full items-center justify-between rounded-lg border border-[var(--border-strong)] bg-[var(--bg-secondary)] px-3 py-2.5 text-left text-sm font-semibold text-[var(--text-primary)] shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_3px_0_rgba(0,0,0,0.45),0_10px_20px_rgba(0,0,0,0.25)] transition-micro hover:bg-[var(--bg-tertiary)] hover:translate-y-[1px] hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_2px_0_rgba(0,0,0,0.45),0_8px_16px_rgba(0,0,0,0.22)] active:translate-y-[2px] active:shadow-[inset_0_1px_0_rgba(255,255,255,0.06),0_1px_0_rgba(0,0,0,0.45),0_6px_12px_rgba(0,0,0,0.2)]"
                     >
                       <span>Disconnect</span>
                       <svg
@@ -536,7 +536,7 @@ export function Header({
                         strokeWidth="2"
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        className="transition-micro group-hover:translate-x-0.5"
+                        className="text-[var(--text-secondary)] transition-micro group-hover:translate-x-0.5 group-hover:text-[var(--text-primary)]"
                       >
                         <path d="M9 18l6-6-6-6" />
                       </svg>
