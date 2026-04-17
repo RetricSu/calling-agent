@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useFiberNode } from "@fiber-pay/react";
+import { Fiber } from "@nervosnetwork/fiber-js";
 import { Header } from "./components/Header";
 import { Chat } from "./components/Chat";
 
@@ -19,6 +20,7 @@ function App() {
     stop,
   } = useFiberNode({
     network: "testnet",
+    wasmFactory: () => new Fiber(),
   });
   const [isConnecting, setIsConnecting] = useState(false);
   const [agentUrl, setAgentUrl] = useState(DEFAULT_AGENT_URL);
