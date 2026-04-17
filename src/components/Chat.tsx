@@ -292,7 +292,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
                   className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                 >
                   <div
-                    className={`max-w-[80%] rounded-2xl px-5 py-3 text-[15px] leading-relaxed sm:max-w-[70%] ${bubbleClasses[msg.role]}`}
+                    className={`max-w-[80%] rounded-2xl px-5 py-3 text-[15px] leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere] sm:max-w-[70%] ${bubbleClasses[msg.role]}`}
                   >
                     {msg.role === "agent" ? (
                       <div className="flex flex-col gap-2">
@@ -320,7 +320,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
                               </span>
                             );
                           }
-                          return <p key={idx} className="whitespace-pre-wrap">{part.value}</p>;
+                          return <p key={idx} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{part.value}</p>;
                         })}
                       </div>
                     ) : (

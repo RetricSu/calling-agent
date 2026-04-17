@@ -120,8 +120,28 @@ export function Header({
   const [peerActionMsg, setPeerActionMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const channelPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const peerActionHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const hasError = !!error;
+
+  function setPeerActionFeedback(
+    message: { type: "success" | "error"; text: string } | null,
+    autoHideMs?: number,
+  ) {
+    if (peerActionHideRef.current) {
+      clearTimeout(peerActionHideRef.current);
+      peerActionHideRef.current = null;
+    }
+
+    setPeerActionMsg(message);
+
+    if (message && autoHideMs && autoHideMs > 0) {
+      peerActionHideRef.current = setTimeout(() => {
+        setPeerActionMsg(null);
+        peerActionHideRef.current = null;
+      }, autoHideMs);
+    }
+  }
 
   useEffect(() => {
     if (!node || node.state !== "running") {
@@ -166,6 +186,10 @@ export function Header({
         clearInterval(channelPollRef.current);
         channelPollRef.current = null;
       }
+      if (peerActionHideRef.current) {
+        clearTimeout(peerActionHideRef.current);
+        peerActionHideRef.current = null;
+      }
     };
   }, []);
 
@@ -177,12 +201,12 @@ export function Header({
   async function handleConnectPeer() {
     if (!node || !peerAddress.trim()) return;
     setPeerActionLoading(true);
-    setPeerActionMsg(null);
+    setPeerActionFeedback(null);
     try {
       await node.connectPeer({ address: peerAddress.trim() });
-      setPeerActionMsg({ type: "success", text: "Peer connected" });
+      setPeerActionFeedback({ type: "success", text: "Peer connected" }, 4000);
     } catch (e) {
-      setPeerActionMsg({ type: "error", text: e instanceof Error ? e.message : String(e) });
+      setPeerActionFeedback({ type: "error", text: e instanceof Error ? e.message : String(e) });
     } finally {
       setPeerActionLoading(false);
     }
@@ -196,7 +220,7 @@ export function Header({
     let pubkey = isHexPubkey ? trimmed : null;
 
     setPeerActionLoading(true);
-    setPeerActionMsg(null);
+    setPeerActionFeedback(null);
 
     if (channelPollRef.current) {
       clearInterval(channelPollRef.current);
@@ -209,7 +233,7 @@ export function Header({
         const peers = await node.listPeers();
         const matched = peers.peers.find((p) => p.address === trimmed);
         if (!matched) {
-          setPeerActionMsg({ type: "error", text: "Connected but could not find peer pubkey. Try again in a moment." });
+          setPeerActionFeedback({ type: "error", text: "Connected but could not find peer pubkey. Try again in a moment." });
           setPeerActionLoading(false);
           return;
         }
@@ -223,7 +247,7 @@ export function Header({
       });
 
       const channelId = result.temporary_channel_id;
-      setPeerActionMsg({ type: "success", text: CHANNEL_STATE_LABELS[ChannelState.NegotiatingFunding] });
+      setPeerActionFeedback({ type: "success", text: CHANNEL_STATE_LABELS[ChannelState.NegotiatingFunding] });
 
       const uiPoll = setInterval(async () => {
         try {
@@ -232,7 +256,7 @@ export function Header({
           if (!ch) return;
           const stateName = ch.state.state_name;
           const label = CHANNEL_STATE_LABELS[stateName] || stateName;
-          setPeerActionMsg({ type: "success", text: label });
+          setPeerActionFeedback({ type: "success", text: label });
         } catch {
         }
       }, 3000);
@@ -242,7 +266,7 @@ export function Header({
       const safetyTimeout = setTimeout(() => {
         clearInterval(uiPoll);
         channelPollRef.current = null;
-        setPeerActionMsg({ type: "error", text: "Timed out waiting for channel to open. Please check your node balance and logs." });
+        setPeerActionFeedback({ type: "error", text: "Timed out waiting for channel to open. Please check your node balance and logs." });
         setPeerActionLoading(false);
       }, 180000);
 
@@ -251,18 +275,18 @@ export function Header({
           clearTimeout(safetyTimeout);
           clearInterval(uiPoll);
           channelPollRef.current = null;
-          setPeerActionMsg({ type: "success", text: CHANNEL_STATE_LABELS[ChannelState.ChannelReady] });
+          setPeerActionFeedback({ type: "success", text: CHANNEL_STATE_LABELS[ChannelState.ChannelReady] }, 6000);
           setPeerActionLoading(false);
         })
         .catch((err) => {
           clearTimeout(safetyTimeout);
           clearInterval(uiPoll);
           channelPollRef.current = null;
-          setPeerActionMsg({ type: "error", text: err instanceof Error ? err.message : String(err) });
+          setPeerActionFeedback({ type: "error", text: err instanceof Error ? err.message : String(err) });
           setPeerActionLoading(false);
         });
     } catch (e) {
-      setPeerActionMsg({ type: "error", text: e instanceof Error ? e.message : String(e) });
+      setPeerActionFeedback({ type: "error", text: e instanceof Error ? e.message : String(e) });
       setPeerActionLoading(false);
     }
   }
@@ -274,7 +298,7 @@ export function Header({
   if (isRunning) {
     buttonContent = (
       <>
-        <span className="h-2 w-2 rounded-full bg-[var(--success)]"></span>
+        <span className="h-2 w-2 rounded-full bg-[var(--accent)]"></span>
         <span className="font-mono">
           {nodeInfo?.pubkey ? truncateNodeId(nodeInfo.pubkey) : "Connected"}
         </span>
@@ -400,7 +424,7 @@ export function Header({
             <div className="relative">
               <button
                 onClick={() => setShowDropdown((s) => !s)}
-                className="flex items-center gap-2 rounded-full border border-[var(--success)]/30 bg-[var(--success)]/10 px-4 py-2 text-sm font-medium text-[var(--success)] transition-micro hover:bg-[var(--success)]/15"
+                className="flex items-center gap-2 rounded-full border border-[var(--accent)]/35 bg-[var(--accent)]/12 px-4 py-2 text-sm font-medium text-[var(--accent)] transition-micro hover:bg-[var(--accent)]/20"
               >
                 {buttonContent}
               </button>
@@ -500,9 +524,22 @@ export function Header({
                   <div className="mt-3 border-t border-[var(--border-default)] pt-2">
                     <button
                       onClick={handleDisconnect}
-                      className="w-full rounded-lg px-3 py-2 text-left text-sm text-[var(--text-primary)] transition-micro hover:bg-[var(--accent-subtle)] hover:text-[var(--accent)]"
+                      className="group flex w-full items-center justify-between rounded-lg border border-[var(--error)]/35 bg-[var(--error)]/8 px-3 py-2 text-left text-sm font-medium text-[var(--error)] transition-micro hover:bg-[var(--error)]/14"
                     >
-                      Disconnect
+                      <span>Disconnect</span>
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className="transition-micro group-hover:translate-x-0.5"
+                      >
+                        <path d="M9 18l6-6-6-6" />
+                      </svg>
                     </button>
                   </div>
                 </div>
