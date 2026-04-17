@@ -6,6 +6,7 @@ type Message = {
   role: "user" | "agent" | "system";
   content: string;
   stderr?: string;
+  stderrFirst?: boolean;
 };
 
 const STORAGE_KEY = "agentSessionId";
@@ -334,7 +335,6 @@ export function Chat({ node, agentUrl }: ChatProps) {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
-  const [lastDelivery, setLastDelivery] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState(() => {
     if (typeof window === "undefined") return "";
     const stored = localStorage.getItem(STORAGE_KEY);
@@ -355,7 +355,6 @@ export function Chat({ node, agentUrl }: ChatProps) {
     setSessionId(id);
     setMessages([]);
     setInput("");
-    setLastDelivery(null);
   }
 
   async function sendMessage(content: string) {
@@ -410,6 +409,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
                 role: "agent",
                 content: chunk.type === "stdout" ? chunk.text : "",
                 stderr: chunk.type === "stderr" ? chunk.text : undefined,
+                  stderrFirst: chunk.type === "stderr",
               },
             ]);
             return;
@@ -425,12 +425,6 @@ export function Chat({ node, agentUrl }: ChatProps) {
             )
           );
         }
-      );
-
-      setLastDelivery(
-        result.transport === "sse"
-          ? `SSE (stdout ${result.stdoutChunkCount ?? 0}, stderr ${result.stderrChunkCount ?? 0})`
-          : "JSON fallback"
       );
 
       if (!streamedChunk) {
@@ -530,6 +524,16 @@ export function Chat({ node, agentUrl }: ChatProps) {
                   >
                     {msg.role === "agent" ? (
                       <div className="flex flex-col gap-2">
+                        {msg.stderrFirst && msg.stderr && msg.stderr.trim() && (
+                          <details className="rounded-lg border border-[var(--border-default)]/60 bg-[var(--bg-secondary)]/30 px-3 py-2">
+                            <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
+                              stderr logs ({msg.stderr.split(/\r?\n/).filter(Boolean).length} lines)
+                            </summary>
+                            <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-[var(--text-muted)]/90">
+                              {msg.stderr}
+                            </pre>
+                          </details>
+                        )}
                         {msg.content.trim() &&
                           formatAgentContent(msg.content).map((part, idx) => {
                             if (part.type === "tool") {
@@ -557,7 +561,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
                             }
                             return <p key={idx} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{part.value}</p>;
                           })}
-                        {msg.stderr && msg.stderr.trim() && (
+                        {!msg.stderrFirst && msg.stderr && msg.stderr.trim() && (
                           <details className="rounded-lg border border-[var(--border-default)]/60 bg-[var(--bg-secondary)]/30 px-3 py-2">
                             <summary className="cursor-pointer text-[11px] text-[var(--text-muted)]">
                               stderr logs ({msg.stderr.split(/\r?\n/).filter(Boolean).length} lines)
@@ -597,16 +601,9 @@ export function Chat({ node, agentUrl }: ChatProps) {
 
         <div className="border-t border-[var(--border-default)] bg-[var(--bg-secondary)] px-6 py-4">
           <div className="mb-3 flex items-center justify-between">
-            <div className="flex flex-col">
-              <span className="text-[10px] text-[var(--text-muted)]">
-                Session: {sessionId.slice(0, 8)}…
-              </span>
-              {lastDelivery && (
-                <span className="text-[10px] text-[var(--text-tertiary)]">
-                  Transport: {lastDelivery}
-                </span>
-              )}
-            </div>
+            <span className="text-[10px] text-[var(--text-muted)]">
+              Session: {sessionId.slice(0, 8)}…
+            </span>
             <button
               onClick={startNewChat}
               className="text-[11px] font-medium text-[var(--text-secondary)] transition-micro hover:text-[var(--accent)]"
