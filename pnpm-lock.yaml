@@ -11,6 +11,9 @@ importers:
       '@fiber-pay/react':
         specifier: ^0.2.3
         version: 0.2.3(react@19.2.5)
+      '@nervosnetwork/fiber-js':
+        specifier: ~0.8.1
+        version: 0.8.1
       qrcode.react:
         specifier: ^4.2.0
         version: 4.2.0(react@19.2.5)
@@ -27,9 +30,6 @@ importers:
       '@fiber-pay/sdk':
         specifier: ^0.2.3
         version: 0.2.3(@nervosnetwork/fiber-js@0.8.1)
-      '@nervosnetwork/fiber-js':
-        specifier: ~0.8.1
-        version: 0.8.1
       '@tailwindcss/vite':
         specifier: ^4.2.2
         version: 4.2.2(vite@8.0.8(@types/node@24.12.2)(jiti@2.6.1))
