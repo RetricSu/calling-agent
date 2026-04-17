@@ -146,11 +146,6 @@ async function readSseResponse(
               ? "Agent is streaming (with warnings)..."
               : "Agent is streaming..."
           );
-
-          // Yield one frame so each chunk has a chance to paint.
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          });
         }
       } else if (event === "done") {
         const meta =
