@@ -12,9 +12,9 @@ type Message = {
 const STORAGE_KEY = "agentSessionId";
 
 const quickActions = [
-  "Build a landing page for my project",
-  "Debug this TypeScript error",
-  "Write a product announcement tweet",
+  "Write a python script to fetch CKB price and generate a 24h trend chart",
+  "Read the Fiber documentation and run test scripts to verify it",
+  "Use the @ckb-ccc/ccc library to write a simple CKB DApp",
 ];
 
 interface ChatProps {
@@ -485,7 +485,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
                 What would you like me to do?
               </h1>
               <p className="max-w-md text-[var(--text-secondary)]">
-                A crowdsourced agent marketplace. Connect to any hosted service, pay over L402, and get work done. No platform lock-in.
+                The decentralized AI agent platform. Unbound, fluid compute for CI and automation powered by a global network over L402. No platform lock-in.
               </p>
               <a
                 href="https://github.com/RetricSu/fiber-pay/blob/feat/agent-boxlite-sandbox/docs/boxlite-agent-setup.md"
