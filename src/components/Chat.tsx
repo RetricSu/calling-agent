@@ -10,6 +10,11 @@ type Message = {
 };
 
 const STORAGE_KEY = "agentSessionId";
+// Testnet trampoline node pubkey used to delegate payment routing calculations.
+// Browser nodes typically lack the full network graph and compute, so using a well-connected 
+// trampoline hop significantly improves the success rate of finding a payment path.
+const DEFAULT_TRAMPOLINE_HOP =
+  "0x02b6d4e3ab86a2ca2fad6fae0ecb2e1e559e0b911939872a90abdda6d20302be71";
 
 const quickActions = [
   "Write a python script to fetch CKB price and generate a 24h trend chart",
@@ -222,7 +227,10 @@ async function callAgent(
     const invoice = challenge.invoice as string;
 
     onStatus("Paying L402 invoice via Fiber...");
-    const payment = await node.sendPayment({ invoice });
+    const payment = await node.sendPayment({
+      invoice,
+      trampoline_hops: [DEFAULT_TRAMPOLINE_HOP],
+    });
 
     onStatus("Waiting for payment confirmation...");
     const result = await node.waitForPayment(payment.payment_hash, {
