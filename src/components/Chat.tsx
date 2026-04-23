@@ -326,12 +326,17 @@ async function callAgent(
 }
 
 function formatAgentContent(content: string) {
+  // Remove protocol-like completion lines, but keep any real text around them.
+  const sanitized = content
+    .replace(/^\s*\[done\]\s*end_turn\s*$/gim, "")
+    .replace(/^\s*end_turn\s*$/gim, "");
+
   const parts: { type: "text" | "tag" | "thinking" | "tool"; value: string }[] = [];
-  const tagRegex = /\[(client|thinking|done|tool)\b([^\]]*)\]/g;
+  const tagRegex = /\[(client|thinking|tool)\b([^\]]*)\]/g;
   const tags: { index: number; kind: string; header: string }[] = [];
 
   let m: RegExpExecArray | null;
-  while ((m = tagRegex.exec(content)) !== null) {
+  while ((m = tagRegex.exec(sanitized)) !== null) {
     tags.push({
       index: m.index,
       kind: m[1],
@@ -341,14 +346,14 @@ function formatAgentContent(content: string) {
 
   let lastEnd = 0;
   for (let i = 0; i < tags.length; i++) {
-    const before = content.slice(lastEnd, tags[i].index).trim();
+    const before = sanitized.slice(lastEnd, tags[i].index).trim();
     if (before) {
       parts.push({ type: "text", value: before });
     }
 
     const start = tags[i].index;
-    const end = tags[i + 1] ? tags[i + 1].index : content.length;
-    const body = content.slice(start + tags[i].header.length, end).trim();
+    const end = tags[i + 1] ? tags[i + 1].index : sanitized.length;
+    const body = sanitized.slice(start + tags[i].header.length, end).trim();
     const value = tags[i].header + (body ? `\n${body}` : "");
 
     if (tags[i].kind === "thinking") {
@@ -358,14 +363,14 @@ function formatAgentContent(content: string) {
       parts.push({ type: "tool", value });
     } else if (tags[i].kind === "client") {
       parts.push({ type: "tag", value });
-    } else if (tags[i].kind !== "done") {
+    } else {
       parts.push({ type: "tag", value });
     }
 
     lastEnd = end;
   }
 
-  const after = content.slice(lastEnd).trim();
+  const after = sanitized.slice(lastEnd).trim();
   if (after) {
     parts.push({ type: "text", value: after });
   }
