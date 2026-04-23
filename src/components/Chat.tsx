@@ -9,7 +9,17 @@ type Message = {
   stderrFirst?: boolean;
 };
 
-const STORAGE_KEY = "agentSessionId";
+type SessionState = { id: string; token: string } | null;
+
+const SESSION_STORAGE_KEY = "agentSession";
+
+class SessionError extends Error {
+  code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
 // Testnet trampoline node pubkey used to delegate payment routing calculations.
 // Browser nodes typically lack the full network graph and compute, so using a well-connected 
 // trampoline hop significantly improves the success rate of finding a payment path.
@@ -33,6 +43,7 @@ type AgentResponse = {
   agent?: string;
   durationMs?: number;
   transport: "sse" | "json";
+  session?: { id: string; token: string; created: boolean };
   chunkCount?: number;
   stdoutChunkCount?: number;
   stderrChunkCount?: number;
@@ -45,9 +56,14 @@ type StreamChunk = {
 
 function getAgentRequestInit(
   prompt: string,
-  sessionId: string,
+  session: SessionState,
   extraHeaders?: Record<string, string>
 ): RequestInit {
+  const body: Record<string, unknown> = { prompt, format: "json", stream: "sse" };
+  if (session) {
+    body.sessionId = session.id;
+    body.sessionToken = session.token;
+  }
   return {
     method: "POST",
     headers: {
@@ -55,7 +71,7 @@ function getAgentRequestInit(
       Accept: "text/event-stream",
       ...extraHeaders,
     },
-    body: JSON.stringify({ prompt, sessionId, format: "json", stream: "sse" }),
+    body: JSON.stringify(body),
   };
 }
 
@@ -76,7 +92,7 @@ async function readSseResponse(
   let stdoutChunkCount = 0;
   let stderrChunkCount = 0;
   let sawDone = false;
-  let doneMeta: { agent?: string; durationMs?: number } = {};
+  let doneMeta: { agent?: string; durationMs?: number; session?: { id: string; token: string; created: boolean } } = {};
 
   onStatus("SSE connected, waiting for chunks...");
 
@@ -155,22 +171,41 @@ async function readSseResponse(
       } else if (event === "done") {
         const meta =
           typeof payload === "object" && payload !== null
-            ? (payload as { agent?: unknown; durationMs?: unknown })
+            ? (payload as { agent?: unknown; durationMs?: unknown; session?: unknown })
             : {};
+        const rawSession = meta.session;
+        const sessionInfo =
+          typeof rawSession === "object" &&
+          rawSession !== null &&
+          "id" in rawSession &&
+          "token" in rawSession
+            ? {
+                id: String((rawSession as { id: unknown }).id),
+                token: String((rawSession as { token: unknown }).token),
+                created: !!(rawSession as { created?: unknown }).created,
+              }
+            : undefined;
         doneMeta = {
           agent: typeof meta.agent === "string" ? meta.agent : undefined,
           durationMs:
             typeof meta.durationMs === "number" ? meta.durationMs : undefined,
+          session: sessionInfo,
         };
         sawDone = true;
       } else if (event === "error") {
+        const errPayload =
+          typeof payload === "object" && payload !== null
+            ? (payload as { message?: unknown; code?: unknown; session?: unknown })
+            : {};
         const message =
-          typeof payload === "object" &&
-          payload !== null &&
-          "message" in payload &&
-          typeof (payload as { message?: unknown }).message === "string"
-            ? (payload as { message: string }).message
+          typeof errPayload.message === "string"
+            ? errPayload.message
             : "Agent execution failed";
+        const code =
+          typeof errPayload.code === "string" ? errPayload.code : "";
+        if (code.startsWith("SESSION_")) {
+          throw new SessionError(code, message);
+        }
         throw new Error(message);
       }
     }
@@ -185,6 +220,7 @@ async function readSseResponse(
     stderr: stderrOutput || undefined,
     agent: doneMeta.agent,
     durationMs: doneMeta.durationMs,
+    session: doneMeta.session,
     transport: "sse",
     chunkCount: stdoutChunkCount + stderrChunkCount,
     stdoutChunkCount,
@@ -203,22 +239,50 @@ async function parseAgentResponse(
   }
 
   onStatus("Server returned JSON fallback");
-  const json = (await response.json()) as AgentResponse;
-  return { ...json, transport: "json" };
+  const json = (await response.json()) as Record<string, unknown>;
+  const rawSession = json.session;
+  const sessionInfo =
+    typeof rawSession === "object" &&
+    rawSession !== null &&
+    "id" in rawSession &&
+    "token" in rawSession
+      ? {
+          id: String((rawSession as { id: unknown }).id),
+          token: String((rawSession as { token: unknown }).token),
+          created: !!(rawSession as { created?: unknown }).created,
+        }
+      : undefined;
+  return {
+    response: typeof json.response === "string" ? json.response : "",
+    stderr: typeof json.stderr === "string" ? json.stderr : undefined,
+    agent: typeof json.agent === "string" ? json.agent : undefined,
+    durationMs: typeof json.durationMs === "number" ? json.durationMs : undefined,
+    session: sessionInfo,
+    transport: "json",
+  };
 }
 
 async function callAgent(
   url: string,
   prompt: string,
-  sessionId: string,
+  session: SessionState,
   node: FiberBrowserNode,
   onStatus: (text: string) => void,
   onChunk: (chunk: StreamChunk) => void | Promise<void>
 ): Promise<AgentResponse> {
-  const initial = await fetch(url, getAgentRequestInit(prompt, sessionId));
+  const initial = await fetch(url, getAgentRequestInit(prompt, session));
 
   if (initial.ok) {
     return await parseAgentResponse(initial, onChunk, onStatus);
+  }
+
+  // Handle session contract errors (400 / 403)
+  if (initial.status === 400 || initial.status === 403) {
+    const errBody = await initial.json().catch(() => ({} as Record<string, unknown>));
+    const code = typeof errBody?.code === "string" ? errBody.code : "";
+    if (code.startsWith("SESSION_")) {
+      throw new SessionError(code, typeof errBody?.message === "string" ? errBody.message : "Session error");
+    }
   }
 
   if (initial.status === 402) {
@@ -245,7 +309,7 @@ async function callAgent(
     onStatus("Agent is executing...");
     const retry = await fetch(
       url,
-      getAgentRequestInit(prompt, sessionId, {
+      getAgentRequestInit(prompt, session, {
         Authorization: `L402 ${macaroon}`,
         "X-L402-Payment-Hash": payment.payment_hash,
       })
@@ -338,13 +402,15 @@ export function Chat({ node, agentUrl }: ChatProps) {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [statusLabel, setStatusLabel] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState(() => {
-    if (typeof window === "undefined") return "";
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) return stored;
-    const id = crypto.randomUUID();
-    localStorage.setItem(STORAGE_KEY, id);
-    return id;
+  const [session, setSession] = useState<SessionState>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed?.id && parsed?.token) return { id: parsed.id, token: parsed.token };
+    } catch { /* ignore corrupt data */ }
+    return null;
   });
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -353,9 +419,8 @@ export function Chat({ node, agentUrl }: ChatProps) {
   }, [messages, isTyping]);
 
   function startNewChat() {
-    const id = crypto.randomUUID();
-    localStorage.setItem(STORAGE_KEY, id);
-    setSessionId(id);
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+    setSession(null);
     setMessages([]);
     setInput("");
   }
@@ -395,7 +460,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
       const result = await callAgent(
         agentUrl,
         content,
-        sessionId,
+        session,
         node,
         (status) => {
           setStatusLabel(status);
@@ -430,6 +495,13 @@ export function Chat({ node, agentUrl }: ChatProps) {
         }
       );
 
+      // Persist server-assigned session
+      if (result.session) {
+        const newSession = { id: result.session.id, token: result.session.token };
+        setSession(newSession);
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(newSession));
+      }
+
       if (!streamedChunk) {
         if (!result.response.trim() && !(result.stderr && result.stderr.trim())) {
           return;
@@ -446,13 +518,20 @@ export function Chat({ node, agentUrl }: ChatProps) {
         ]);
       }
     } catch (err) {
+      // Auto-clear session on session contract errors
+      if (err instanceof SessionError) {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+        setSession(null);
+      }
       const message = err instanceof Error ? err.message : "Unknown error";
       setMessages((prev) => [
         ...prev,
         {
           id: crypto.randomUUID(),
           role: "system",
-          content: `Failed to call agent: ${message}`,
+          content: err instanceof SessionError
+            ? `Session error (${err.code}): ${message}. Starting a new session.`
+            : `Failed to call agent: ${message}`,
         },
       ]);
     } finally {
@@ -605,7 +684,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
         <div className="border-t border-[var(--border-default)] bg-[var(--bg-secondary)] px-6 py-4">
           <div className="mb-3 flex items-center justify-between">
             <span className="text-[10px] text-[var(--text-muted)]">
-              Session: {sessionId.slice(0, 8)}…
+              {session ? `Session: ${session.id.slice(0, 12)}…` : "New session"}
             </span>
             <button
               onClick={startNewChat}
