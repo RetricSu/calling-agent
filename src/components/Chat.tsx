@@ -332,7 +332,7 @@ function formatAgentContent(content: string) {
     .replace(/^\s*end_turn\s*$/gim, "");
 
   const parts: { type: "text" | "tag" | "thinking" | "tool"; value: string }[] = [];
-  const tagRegex = /\[(client|thinking|tool)\b([^\]]*)\]/g;
+  const tagRegex = /\[(client|thinking|done|tool)\b([^\]]*)\]/g;
   const tags: { index: number; kind: string; header: string }[] = [];
 
   let m: RegExpExecArray | null;
@@ -363,7 +363,7 @@ function formatAgentContent(content: string) {
       parts.push({ type: "tool", value });
     } else if (tags[i].kind === "client") {
       parts.push({ type: "tag", value });
-    } else {
+    } else if (tags[i].kind !== "done") {
       parts.push({ type: "tag", value });
     }
 
