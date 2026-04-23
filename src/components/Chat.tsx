@@ -346,19 +346,20 @@ function formatAgentContent(content: string) {
 
   let lastEnd = 0;
   for (let i = 0; i < tags.length; i++) {
-    const before = sanitized.slice(lastEnd, tags[i].index).trim();
-    if (before) {
+    const before = sanitized.slice(lastEnd, tags[i].index);
+    if (before.length > 0) {
       parts.push({ type: "text", value: before });
     }
 
     const start = tags[i].index;
     const end = tags[i + 1] ? tags[i + 1].index : sanitized.length;
-    const body = sanitized.slice(start + tags[i].header.length, end).trim();
+    const rawBody = sanitized.slice(start + tags[i].header.length, end);
+    const body = rawBody.trim();
     const value = tags[i].header + (body ? `\n${body}` : "");
 
     if (tags[i].kind === "thinking") {
       parts.push({ type: "thinking", value: "Thinking" });
-      if (body) parts.push({ type: "text", value: body });
+      if (rawBody.length > 0) parts.push({ type: "text", value: rawBody });
     } else if (tags[i].kind === "tool") {
       parts.push({ type: "tool", value });
     } else if (tags[i].kind === "client") {
@@ -370,8 +371,8 @@ function formatAgentContent(content: string) {
     lastEnd = end;
   }
 
-  const after = sanitized.slice(lastEnd).trim();
-  if (after) {
+  const after = sanitized.slice(lastEnd);
+  if (after.length > 0) {
     parts.push({ type: "text", value: after });
   }
 
@@ -646,7 +647,7 @@ export function Chat({ node, agentUrl }: ChatProps) {
                                 </span>
                               );
                             }
-                            return <p key={idx} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{part.value}</p>;
+                            return <p key={idx} className="m-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{part.value}</p>;
                           })}
                         {!msg.stderrFirst && msg.stderr && msg.stderr.trim() && (
                           <details className="rounded-lg border border-[var(--border-default)]/60 bg-[var(--bg-secondary)]/30 px-3 py-2">
