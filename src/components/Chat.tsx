@@ -326,10 +326,10 @@ async function callAgent(
 }
 
 function formatAgentContent(content: string) {
-  // Remove protocol-like completion lines, but keep any real text around them.
+  // Remove protocol-like completion lines and their surrounding newlines to prevent artificial gaps.
   const sanitized = content
-    .replace(/^\s*\[done\]\s*end_turn\s*$/gim, "")
-    .replace(/^\s*end_turn\s*$/gim, "");
+    .replace(/(?:^|\r?\n)[ \t]*\[done\][ \t]*end_turn[ \t]*(?:\r?\n|$)/gi, "")
+    .replace(/(?:^|\r?\n)[ \t]*end_turn[ \t]*(?:\r?\n|$)/gi, "");
 
   const parts: { type: "text" | "tag" | "thinking" | "tool"; value: string }[] = [];
   const tagRegex = /\[(client|thinking|done|tool)\b([^\]]*)\]/g;
