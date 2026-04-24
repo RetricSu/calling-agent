@@ -456,9 +456,28 @@ function buildWorkspaceListUrl(agentUrl: string, path: string) {
   return url.toString();
 }
 
+function isTextLikePreview(contentType: string, filePath: string) {
+  if (contentType.startsWith("text/") && !contentType.includes("text/html")) {
+    return true;
+  }
+
+  if (
+    contentType.includes("application/json") ||
+    contentType.includes("application/xml") ||
+    contentType.includes("application/x-yaml")
+  ) {
+    return true;
+  }
+
+  return /\.(txt|log|md|json|yaml|yml|toml|ini|csv|tsv|env|py|ts|tsx|js|jsx|css|html?)$/i.test(
+    filePath
+  );
+}
+
 function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: SessionState }) {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewText, setPreviewText] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -558,6 +577,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
 
     setIsPreviewLoading(true);
     setPreviewError(null);
+    setPreviewText(null);
     try {
       const response = await fetch(buildWorkspaceStaticUrl(agentUrl, normalized), {
         signal: controller.signal,
@@ -577,6 +597,21 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
         throw new Error(typeof payload.error === "string" ? payload.error : "Failed to load preview");
       }
 
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      if (isTextLikePreview(contentType, normalized)) {
+        const text = await response.text();
+        if (requestSeq !== previewRequestSeqRef.current) {
+          return;
+        }
+        setPreviewUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
+        setPreviewText(text);
+        setActivePath(normalized);
+        return;
+      }
+
       const blob = await response.blob();
       if (requestSeq !== previewRequestSeqRef.current) {
         return;
@@ -586,6 +621,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
         if (previous) URL.revokeObjectURL(previous);
         return objectUrl;
       });
+      setPreviewText(null);
       setActivePath(normalized);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -613,6 +649,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
         URL.revokeObjectURL(previewUrl);
       }
       setPreviewUrl(null);
+      setPreviewText(null);
       setPreviewError(null);
       setIsPreviewLoading(false);
       setCurrentDir("");
@@ -627,6 +664,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
       previewAbortRef.current.abort();
     }
     previewAbortRef.current = null;
+    setPreviewText(null);
     setPreviewError(null);
     setIsPreviewLoading(false);
 
@@ -744,6 +782,10 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
               <div className="flex h-full items-center justify-center px-4 text-center text-xs text-[var(--error)]">
                 {previewError}
               </div>
+            ) : previewText !== null ? (
+              <pre className="h-full overflow-auto bg-[var(--bg-secondary)] px-4 py-3 font-mono text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-[var(--text-primary)]">
+                {previewText}
+              </pre>
             ) : previewUrl ? (
               <iframe
                 key={`${session.id}:${activePath ?? ""}`}
