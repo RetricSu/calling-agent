@@ -482,9 +482,20 @@ function isImageLikePreview(contentType: string, filePath: string) {
   return /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(filePath);
 }
 
-function shouldInvalidateSession(code: unknown, message: unknown) {
-  if (typeof code === "string" && code.startsWith("SESSION_")) {
+function shouldInvalidateSession(status: number, code: unknown, message: unknown) {
+  if (status === 401 || status === 403) {
     return true;
+  }
+
+  if (typeof code === "string") {
+    const normalizedCode = code.toUpperCase();
+    if (
+      normalizedCode.startsWith("SESSION_") ||
+      normalizedCode.includes("AUTH") ||
+      normalizedCode.includes("TOKEN")
+    ) {
+      return true;
+    }
   }
 
   if (typeof message !== "string") {
@@ -492,7 +503,19 @@ function shouldInvalidateSession(code: unknown, message: unknown) {
   }
 
   const normalized = message.toLowerCase();
-  return normalized.includes("session token") || normalized.includes("session id");
+  const referencesSession =
+    normalized.includes("session token") ||
+    normalized.includes("session id") ||
+    normalized.includes("session");
+  const indicatesAuthFailure =
+    normalized.includes("invalid") ||
+    normalized.includes("expired") ||
+    normalized.includes("mismatch") ||
+    normalized.includes("unmatched") ||
+    normalized.includes("unauthorized") ||
+    normalized.includes("forbidden");
+
+  return referencesSession && indicatesAuthFailure;
 }
 
 function ArtifactsPanel({
@@ -564,7 +587,7 @@ function ArtifactsPanel({
 
       const payload = (await response.json().catch(() => ({}))) as WorkspaceListResponse;
       if (!response.ok) {
-        if (shouldInvalidateSession(payload.code, payload.error)) {
+        if (shouldInvalidateSession(response.status, payload.code, payload.error)) {
           onSessionInvalid();
           return;
         }
@@ -629,7 +652,7 @@ function ArtifactsPanel({
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { code?: string; error?: string };
-        if (shouldInvalidateSession(payload.code, payload.error)) {
+        if (shouldInvalidateSession(response.status, payload.code, payload.error)) {
           onSessionInvalid();
           return;
         }
