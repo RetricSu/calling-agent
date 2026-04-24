@@ -474,10 +474,40 @@ function isTextLikePreview(contentType: string, filePath: string) {
   );
 }
 
-function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: SessionState }) {
+function isImageLikePreview(contentType: string, filePath: string) {
+  if (contentType.startsWith("image/")) {
+    return true;
+  }
+
+  return /\.(apng|avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(filePath);
+}
+
+function shouldInvalidateSession(code: unknown, message: unknown) {
+  if (typeof code === "string" && code.startsWith("SESSION_")) {
+    return true;
+  }
+
+  if (typeof message !== "string") {
+    return false;
+  }
+
+  const normalized = message.toLowerCase();
+  return normalized.includes("session token") || normalized.includes("session id");
+}
+
+function ArtifactsPanel({
+  agentUrl,
+  session,
+  onSessionInvalid,
+}: {
+  agentUrl: string;
+  session: SessionState;
+  onSessionInvalid: () => void;
+}) {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewText, setPreviewText] = useState<string | null>(null);
+  const [isImagePreview, setIsImagePreview] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const previewAbortRef = useRef<AbortController | null>(null);
@@ -534,6 +564,10 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
 
       const payload = (await response.json().catch(() => ({}))) as WorkspaceListResponse;
       if (!response.ok) {
+        if (shouldInvalidateSession(payload.code, payload.error)) {
+          onSessionInvalid();
+          return;
+        }
         throw new Error(typeof payload.error === "string" ? payload.error : "Failed to list files");
       }
 
@@ -578,6 +612,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
     setIsPreviewLoading(true);
     setPreviewError(null);
     setPreviewText(null);
+    setIsImagePreview(false);
     try {
       const response = await fetch(buildWorkspaceStaticUrl(agentUrl, normalized), {
         signal: controller.signal,
@@ -593,7 +628,11 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
       }
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        const payload = (await response.json().catch(() => ({}))) as { code?: string; error?: string };
+        if (shouldInvalidateSession(payload.code, payload.error)) {
+          onSessionInvalid();
+          return;
+        }
         throw new Error(typeof payload.error === "string" ? payload.error : "Failed to load preview");
       }
 
@@ -608,6 +647,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
           return null;
         });
         setPreviewText(text);
+        setIsImagePreview(false);
         setActivePath(normalized);
         return;
       }
@@ -622,6 +662,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
         return objectUrl;
       });
       setPreviewText(null);
+      setIsImagePreview(isImageLikePreview(contentType, normalized));
       setActivePath(normalized);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -650,6 +691,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
       }
       setPreviewUrl(null);
       setPreviewText(null);
+      setIsImagePreview(false);
       setPreviewError(null);
       setIsPreviewLoading(false);
       setCurrentDir("");
@@ -665,6 +707,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
     }
     previewAbortRef.current = null;
     setPreviewText(null);
+    setIsImagePreview(false);
     setPreviewError(null);
     setIsPreviewLoading(false);
 
@@ -682,7 +725,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
   }
 
   return (
-    <aside className="flex min-h-[420px] flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]">
+    <aside className="flex min-h-[420px] flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)] lg:sticky lg:top-24 lg:h-[calc(100svh-8.5rem)] lg:min-h-0 lg:max-h-[calc(100svh-8.5rem)]">
       <div className="border-b border-[var(--border-default)] px-4 py-4">
         <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--text-muted)]">
           Artifacts
@@ -702,7 +745,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
           </div>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col gap-3 px-4 py-4">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 px-4 py-4">
           <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-tertiary)]/70 p-2">
             <div className="mb-2 flex items-center justify-between gap-2">
               <span className="truncate text-[11px] text-[var(--text-secondary)]">
@@ -773,7 +816,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
             {selectedName ? `Preview: ${selectedName}` : "Preview: select a file"}
           </div>
 
-          <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-tertiary)]">
+          <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-tertiary)] min-h-[240px] lg:min-h-0">
             {isPreviewLoading ? (
               <div className="flex h-full items-center justify-center px-4 text-center text-xs text-[var(--text-muted)]">
                 Loading preview...
@@ -786,6 +829,15 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
               <pre className="h-full overflow-auto bg-[var(--bg-secondary)] px-4 py-3 font-mono text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-[var(--text-primary)]">
                 {previewText}
               </pre>
+            ) : previewUrl && isImagePreview ? (
+              <div className="flex h-full w-full items-center justify-center overflow-auto bg-[var(--bg-secondary)]/40 p-3">
+                <img
+                  src={previewUrl}
+                  alt={selectedName ? `Preview image: ${selectedName}` : "Preview image"}
+                  className="max-h-full max-w-full rounded-md object-contain shadow-[var(--shadow-md)]"
+                  loading="lazy"
+                />
+              </div>
             ) : previewUrl ? (
               <iframe
                 key={`${session.id}:${activePath ?? ""}`}
@@ -827,9 +879,13 @@ export function Chat({ node, agentUrl }: ChatProps) {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  function startNewChat() {
+  function clearPersistedSession() {
     localStorage.removeItem(SESSION_STORAGE_KEY);
     setSession(null);
+  }
+
+  function startNewChat() {
+    clearPersistedSession();
     setMessages([]);
     setInput("");
   }
@@ -959,8 +1015,8 @@ export function Chat({ node, agentUrl }: ChatProps) {
 
   return (
     <div className="flex flex-1 flex-col items-center px-4 py-6">
-      <div className="flex w-full max-w-[1240px] flex-1 flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex min-h-[640px] flex-1 flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]">
+      <div className="flex w-full max-w-[1240px] flex-1 flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+        <div className="flex min-h-[640px] flex-1 flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)] lg:h-[calc(100svh-8.5rem)] lg:min-h-0">
         <div className="flex-1 overflow-y-auto px-6 py-8">
           {isEmpty ? (
             <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
@@ -1140,7 +1196,11 @@ export function Chat({ node, agentUrl }: ChatProps) {
         </div>
         </div>
 
-        <ArtifactsPanel agentUrl={agentUrl} session={session} />
+        <ArtifactsPanel
+          agentUrl={agentUrl}
+          session={session}
+          onSessionInvalid={clearPersistedSession}
+        />
       </div>
     </div>
   );
