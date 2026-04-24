@@ -461,6 +461,8 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewRequestSeqRef = useRef(0);
   const [currentDir, setCurrentDir] = useState("");
   const [entries, setEntries] = useState<WorkspaceListEntry[]>([]);
   const [isListing, setIsListing] = useState(false);
@@ -482,6 +484,9 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
 
   useEffect(() => {
     return () => {
+      if (previewAbortRef.current) {
+        previewAbortRef.current.abort();
+      }
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl);
       }
@@ -544,10 +549,18 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
     const normalized = normalizeArtifactDirectoryPath(filePath);
     if (!normalized) return;
 
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    const requestSeq = ++previewRequestSeqRef.current;
+
     setIsPreviewLoading(true);
     setPreviewError(null);
     try {
       const response = await fetch(buildWorkspaceStaticUrl(agentUrl, normalized), {
+        signal: controller.signal,
         headers: {
           Accept: "*/*",
           "x-session-id": session.id,
@@ -555,12 +568,19 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
         },
       });
 
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
+
       if (!response.ok) {
         const payload = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(typeof payload.error === "string" ? payload.error : "Failed to load preview");
       }
 
       const blob = await response.blob();
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
       const objectUrl = URL.createObjectURL(blob);
       setPreviewUrl((previous) => {
         if (previous) URL.revokeObjectURL(previous);
@@ -568,14 +588,26 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
       });
       setActivePath(normalized);
     } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
       setPreviewError(error instanceof Error ? error.message : "Unable to load preview.");
     } finally {
-      setIsPreviewLoading(false);
+      if (requestSeq === previewRequestSeqRef.current) {
+        setIsPreviewLoading(false);
+      }
     }
   }
 
   useEffect(() => {
     if (!session) {
+      if (previewAbortRef.current) {
+        previewAbortRef.current.abort();
+      }
+      previewAbortRef.current = null;
       setActivePath(null);
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl);
@@ -590,6 +622,13 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
       setListError(null);
       return;
     }
+
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    previewAbortRef.current = null;
+    setPreviewError(null);
+    setIsPreviewLoading(false);
 
     refreshDirectory(currentDir);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -711,6 +750,7 @@ function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: Sess
                 src={previewUrl}
                 title={`Artifact preview: ${activePath ?? ""}`}
                 className="h-full w-full"
+                sandbox="allow-scripts"
               />
             ) : (
               <div className="flex h-full items-center justify-center px-4 text-center text-xs text-[var(--text-muted)]">
