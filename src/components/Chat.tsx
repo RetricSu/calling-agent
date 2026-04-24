@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { FiberBrowserNode } from "@fiber-pay/sdk/browser";
 
 type Message = {
@@ -31,6 +31,24 @@ const quickActions = [
   "Read the Fiber documentation and run test scripts to verify it",
   "Use the @ckb-ccc/ccc library to write a simple CKB DApp",
 ];
+
+type WorkspaceListEntry = {
+  name: string;
+  path: string;
+  type: "file" | "dir" | string;
+  sizeBytes?: number;
+  mtimeEpochSeconds?: number;
+};
+
+type WorkspaceListResponse = {
+  sessionId: string;
+  path: string;
+  entries: WorkspaceListEntry[];
+  truncated: boolean;
+  limit: number;
+  code?: string;
+  error?: string;
+};
 
 interface ChatProps {
   node: FiberBrowserNode | null;
@@ -403,6 +421,391 @@ function ToolBlock({ value }: { value: string }) {
   );
 }
 
+function normalizeArtifactDirectoryPath(rawPath: string): string | null {
+  const trimmed = rawPath.trim();
+  if (!trimmed) return "";
+
+  const stripped = trimmed.replace(/^\/+/, "");
+  const withoutQuery = stripped.split("?")[0].split("#")[0];
+  const segments = withoutQuery.split("/").filter(Boolean);
+
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    return null;
+  }
+
+  return segments.join("/");
+}
+
+function buildWorkspaceStaticUrl(
+  agentUrl: string,
+  path: string
+) {
+  const encodedPath = path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+  return new URL(`/workspace/static/${encodedPath}`, agentUrl).toString();
+}
+
+function buildWorkspaceListUrl(agentUrl: string, path: string) {
+  const url = new URL("/workspace/static/list", agentUrl);
+  if (path) {
+    url.searchParams.set("path", path);
+  }
+  return url.toString();
+}
+
+function isTextLikePreview(contentType: string, filePath: string) {
+  if (contentType.startsWith("text/") && !contentType.includes("text/html")) {
+    return true;
+  }
+
+  if (
+    contentType.includes("application/json") ||
+    contentType.includes("application/xml") ||
+    contentType.includes("application/x-yaml")
+  ) {
+    return true;
+  }
+
+  return /\.(txt|log|md|json|yaml|yml|toml|ini|csv|tsv|env|py|ts|tsx|js|jsx|css|html?)$/i.test(
+    filePath
+  );
+}
+
+function ArtifactsPanel({ agentUrl, session }: { agentUrl: string; session: SessionState }) {
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewText, setPreviewText] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewRequestSeqRef = useRef(0);
+  const [currentDir, setCurrentDir] = useState("");
+  const [entries, setEntries] = useState<WorkspaceListEntry[]>([]);
+  const [isListing, setIsListing] = useState(false);
+  const [isTruncated, setIsTruncated] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const selectedName = useMemo(() => {
+    if (!activePath) return null;
+    const parts = activePath.split("/").filter(Boolean);
+    return parts[parts.length - 1] ?? activePath;
+  }, [activePath]);
+
+  const parentDir = useMemo(() => {
+    if (!currentDir) return null;
+    const segments = currentDir.split("/").filter(Boolean);
+    segments.pop();
+    return segments.join("/");
+  }, [currentDir]);
+
+  useEffect(() => {
+    return () => {
+      if (previewAbortRef.current) {
+        previewAbortRef.current.abort();
+      }
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  async function refreshDirectory(dirPath: string) {
+    if (!session) return;
+
+    const normalizedDir = normalizeArtifactDirectoryPath(dirPath);
+    if (normalizedDir === null) {
+      setListError("Unable to open this folder.");
+      return;
+    }
+
+    setIsListing(true);
+    setListError(null);
+    try {
+      const response = await fetch(buildWorkspaceListUrl(agentUrl, normalizedDir), {
+        headers: {
+          Accept: "application/json",
+          "x-session-id": session.id,
+          "x-session-token": session.token,
+        },
+      });
+
+      const payload = (await response.json().catch(() => ({}))) as WorkspaceListResponse;
+      if (!response.ok) {
+        throw new Error(typeof payload.error === "string" ? payload.error : "Failed to list files");
+      }
+
+      const safeEntries = Array.isArray(payload.entries)
+        ? payload.entries
+            .filter((entry) => typeof entry?.name === "string" && typeof entry?.path === "string")
+            .sort((left, right) => {
+              if (left.type === right.type) {
+                return left.name.localeCompare(right.name);
+              }
+              if (left.type === "dir") return -1;
+              if (right.type === "dir") return 1;
+              return left.name.localeCompare(right.name);
+            })
+        : [];
+
+      setCurrentDir(typeof payload.path === "string" ? payload.path : normalizedDir);
+      setEntries(safeEntries);
+      setIsTruncated(!!payload.truncated);
+    } catch (error) {
+      setEntries([]);
+      setIsTruncated(false);
+      setListError(error instanceof Error ? error.message : "Unable to load files.");
+    } finally {
+      setIsListing(false);
+    }
+  }
+
+  async function previewFile(filePath: string) {
+    if (!session) return;
+
+    const normalized = normalizeArtifactDirectoryPath(filePath);
+    if (!normalized) return;
+
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    previewAbortRef.current = controller;
+    const requestSeq = ++previewRequestSeqRef.current;
+
+    setIsPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewText(null);
+    try {
+      const response = await fetch(buildWorkspaceStaticUrl(agentUrl, normalized), {
+        signal: controller.signal,
+        headers: {
+          Accept: "*/*",
+          "x-session-id": session.id,
+          "x-session-token": session.token,
+        },
+      });
+
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(typeof payload.error === "string" ? payload.error : "Failed to load preview");
+      }
+
+      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+      if (isTextLikePreview(contentType, normalized)) {
+        const text = await response.text();
+        if (requestSeq !== previewRequestSeqRef.current) {
+          return;
+        }
+        setPreviewUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
+        setPreviewText(text);
+        setActivePath(normalized);
+        return;
+      }
+
+      const blob = await response.blob();
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
+      const objectUrl = URL.createObjectURL(blob);
+      setPreviewUrl((previous) => {
+        if (previous) URL.revokeObjectURL(previous);
+        return objectUrl;
+      });
+      setPreviewText(null);
+      setActivePath(normalized);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        return;
+      }
+      if (requestSeq !== previewRequestSeqRef.current) {
+        return;
+      }
+      setPreviewError(error instanceof Error ? error.message : "Unable to load preview.");
+    } finally {
+      if (requestSeq === previewRequestSeqRef.current) {
+        setIsPreviewLoading(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!session) {
+      if (previewAbortRef.current) {
+        previewAbortRef.current.abort();
+      }
+      previewAbortRef.current = null;
+      setActivePath(null);
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+      setPreviewUrl(null);
+      setPreviewText(null);
+      setPreviewError(null);
+      setIsPreviewLoading(false);
+      setCurrentDir("");
+      setEntries([]);
+      setIsListing(false);
+      setIsTruncated(false);
+      setListError(null);
+      return;
+    }
+
+    if (previewAbortRef.current) {
+      previewAbortRef.current.abort();
+    }
+    previewAbortRef.current = null;
+    setPreviewText(null);
+    setPreviewError(null);
+    setIsPreviewLoading(false);
+
+    refreshDirectory(currentDir);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentUrl, session?.id, session?.token]);
+
+  function handleOpenEntry(entry: WorkspaceListEntry) {
+    if (entry.type === "dir") {
+      refreshDirectory(entry.path);
+      return;
+    }
+
+    previewFile(entry.path);
+  }
+
+  return (
+    <aside className="flex min-h-[420px] flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]">
+      <div className="border-b border-[var(--border-default)] px-4 py-4">
+        <p className="text-xs font-medium uppercase tracking-[0.12em] text-[var(--text-muted)]">
+          Artifacts
+        </p>
+        <h2 className="mt-1 text-base font-semibold text-[var(--text-primary)]">
+          Workspace files
+        </h2>
+        <p className="mt-1 text-xs text-[var(--text-secondary)]">
+          Click a file to preview.
+        </p>
+      </div>
+
+      {!session ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 py-6 text-center">
+          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-tertiary)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+            Send a message to create a session first.
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-1 flex-col gap-3 px-4 py-4">
+          <div className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-tertiary)]/70 p-2">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="truncate text-[11px] text-[var(--text-secondary)]">
+                {currentDir ? `Folder: ${currentDir}` : "Folder: root"}
+              </span>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={parentDir === null}
+                  onClick={() => {
+                    if (parentDir !== null) refreshDirectory(parentDir);
+                  }}
+                  className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition-micro hover:border-[var(--border-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Up
+                </button>
+                <button
+                  type="button"
+                  onClick={() => refreshDirectory(currentDir)}
+                  className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] text-[var(--text-secondary)] transition-micro hover:border-[var(--border-strong)]"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-56 overflow-y-auto rounded border border-[var(--border-default)] bg-[var(--bg-secondary)]/50">
+              {isListing ? (
+                <div className="px-3 py-2 text-[11px] text-[var(--text-muted)]">Loading workspace files...</div>
+              ) : listError ? (
+                <div className="px-3 py-2 text-[11px] text-[var(--error)]">{listError}</div>
+              ) : entries.length === 0 ? (
+                <div className="px-3 py-2 text-[11px] text-[var(--text-muted)]">No files in this directory.</div>
+              ) : (
+                <ul className="m-0 list-none p-0">
+                  {entries.map((entry) => (
+                    <li key={entry.path}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEntry(entry)}
+                        className={`flex w-full items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2 text-left text-[11px] transition-micro last:border-b-0 ${
+                          entry.type !== "dir" && activePath === entry.path
+                            ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                            : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                        }`}
+                      >
+                        <span className="shrink-0 text-[10px] text-[var(--text-muted)]">
+                          {entry.type === "dir" ? "DIR" : "FILE"}
+                        </span>
+                        <span className="min-w-0 truncate text-[11px]">
+                          {entry.name}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            {isTruncated && (
+              <p className="mt-2 text-[10px] text-[var(--warning)]">
+                Too many files. Open a subfolder to narrow results.
+              </p>
+            )}
+          </div>
+
+          <div className="text-[11px] text-[var(--text-muted)]">
+            {selectedName ? `Preview: ${selectedName}` : "Preview: select a file"}
+          </div>
+
+          <div className="relative flex-1 overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-tertiary)]">
+            {isPreviewLoading ? (
+              <div className="flex h-full items-center justify-center px-4 text-center text-xs text-[var(--text-muted)]">
+                Loading preview...
+              </div>
+            ) : previewError ? (
+              <div className="flex h-full items-center justify-center px-4 text-center text-xs text-[var(--error)]">
+                {previewError}
+              </div>
+            ) : previewText !== null ? (
+              <pre className="h-full overflow-auto bg-[var(--bg-secondary)] px-4 py-3 font-mono text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere] text-[var(--text-primary)]">
+                {previewText}
+              </pre>
+            ) : previewUrl ? (
+              <iframe
+                key={`${session.id}:${activePath ?? ""}`}
+                src={previewUrl}
+                title={`Artifact preview: ${activePath ?? ""}`}
+                className="h-full w-full"
+                sandbox="allow-scripts"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center px-4 text-center text-xs text-[var(--text-muted)]">
+                Select a file from the workspace list to preview it here.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </aside>
+  );
+}
+
 export function Chat({ node, agentUrl }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -555,8 +958,9 @@ export function Chat({ node, agentUrl }: ChatProps) {
   };
 
   return (
-    <div className="flex flex-1 flex-col items-center justify-center px-4 py-6">
-      <div className="flex w-full max-w-[900px] flex-1 flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]">
+    <div className="flex flex-1 flex-col items-center px-4 py-6">
+      <div className="flex w-full max-w-[1240px] flex-1 flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="flex min-h-[640px] flex-1 flex-col rounded-2xl border border-[var(--border-default)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]">
         <div className="flex-1 overflow-y-auto px-6 py-8">
           {isEmpty ? (
             <div className="flex h-full flex-col items-center justify-center gap-6 text-center">
@@ -734,6 +1138,9 @@ export function Chat({ node, agentUrl }: ChatProps) {
             </button>
           </form>
         </div>
+        </div>
+
+        <ArtifactsPanel agentUrl={agentUrl} session={session} />
       </div>
     </div>
   );
