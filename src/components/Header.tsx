@@ -1,4 +1,5 @@
 import type { FiberBrowserNode, NodeInfoResult } from "@fiber-pay/sdk/browser";
+import { AgentEndpointSelector } from "./AgentEndpointSelector";
 import { ConnectButton } from "./ConnectButton";
 
 export interface HeaderProps {
@@ -57,27 +58,7 @@ export function Header({
           </span>
         </div>
 
-        <div className="mx-4 hidden min-w-0 flex-1 items-center justify-center gap-3 md:flex">
-          <div className="shrink-0 text-xs text-[var(--text-secondary)]">
-            AI Agent Endpoint
-            <span className="mx-1.5 text-[var(--border-strong)]">|</span>
-            <a
-              href="https://github.com/RetricSu/fiber-pay/blob/feat/agent-boxlite-sandbox/docs/boxlite-agent-setup.md"
-              target="_blank"
-              rel="noreferrer"
-              className="transition-micro hover:text-[var(--accent)] hover:underline"
-            >
-              Host your own
-            </a>
-          </div>
-          <input
-            type="text"
-            value={agentUrl}
-            onChange={(e) => onAgentUrlChange(e.target.value)}
-            placeholder="https://..."
-            className="w-full max-w-[240px] rounded-lg border border-[var(--border-default)] bg-[var(--bg-secondary)] px-3 py-1.5 text-xs text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none transition-micro focus:border-[var(--accent-dim)]"
-          />
-        </div>
+        <AgentEndpointSelector value={agentUrl} onChange={onAgentUrlChange} />
 
         <ConnectButton
           node={node}

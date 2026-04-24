@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ckb-ccc/ccc": "^1.1.25",
     "@fiber-pay/react": "^0.2.3",
     "@nervosnetwork/fiber-js": "~0.8.1",
     "qrcode.react": "^4.2.0",
