@@ -129,22 +129,49 @@ function parseStructuredData(payload: unknown): AgentCellData | null {
   };
 }
 
-function parseCellData(outputData: string): AgentCellData | null {
+function parseStructuredList(payload: unknown): AgentCellData[] {
+  const records: AgentCellData[] = [];
+
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      const record = parseStructuredData(item);
+      if (record) records.push(record);
+    }
+    return records;
+  }
+
+  if (!payload || typeof payload !== "object") {
+    return records;
+  }
+
+  const direct = parseStructuredData(payload);
+  if (direct) records.push(direct);
+
+  const container = payload as {
+    endpoints?: unknown;
+    records?: unknown;
+    services?: unknown;
+  };
+
+  for (const item of [container.endpoints, container.records, container.services]) {
+    if (!Array.isArray(item)) continue;
+
+    for (const child of item) {
+      const record = parseStructuredData(child);
+      if (record) records.push(record);
+    }
+  }
+
+  return records;
+}
+
+function parseCellData(outputData: string): AgentCellData[] {
   const text = hexToUtf8(outputData);
-  if (!text) return null;
+  if (!text) return [];
 
   try {
     const parsed = JSON.parse(text) as unknown;
-
-    if (Array.isArray(parsed)) {
-      for (const item of parsed) {
-        const record = parseStructuredData(item);
-        if (record) return record;
-      }
-      return null;
-    }
-
-    return parseStructuredData(parsed);
+    return parseStructuredList(parsed);
   } catch {
     const segments = text
       .split(/\r?\n|\||,/)
@@ -152,14 +179,14 @@ function parseCellData(outputData: string): AgentCellData | null {
       .filter(Boolean);
 
     const url = segments.find((item) => isLikelyUrl(item));
-    if (!url) return null;
+    if (!url) return [];
 
     const price = segments.find((item) => item !== url);
 
-    return {
+    return [{
       url,
       price: price ?? "N/A",
-    };
+    }];
   }
 }
 
@@ -183,20 +210,22 @@ async function fetchRegistryEndpoints(): Promise<AgentEndpointRecord[]> {
 
   for await (const cell of client.findCellsByType(typeScript, true, "desc", REGISTRY_CELL_LIMIT)) {
     const outputData = String(cell.outputData ?? "0x");
-    const parsed = parseCellData(outputData);
-    if (!parsed || dedup.has(parsed.url)) {
-      continue;
-    }
-
-    dedup.add(parsed.url);
-
     const txHash = String(cell.outPoint.txHash);
     const txIndex = String(cell.outPoint.index);
-    records.push({
-      id: `${txHash}-${txIndex}`,
-      url: parsed.url,
-      priceLabel: parsed.price ?? "N/A",
-      sourceTx: txHash,
+    const parsedRecords = parseCellData(outputData);
+
+    parsedRecords.forEach((parsed, index) => {
+      if (dedup.has(parsed.url)) {
+        return;
+      }
+
+      dedup.add(parsed.url);
+      records.push({
+        id: `${txHash}-${txIndex}-${index}`,
+        url: parsed.url,
+        priceLabel: parsed.price ?? "N/A",
+        sourceTx: txHash,
+      });
     });
   }
 

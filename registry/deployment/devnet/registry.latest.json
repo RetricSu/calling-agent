@@ -1,0 +1,31 @@
+{
+  "network": "devnet",
+  "rpcUrl": "http://127.0.0.1:28114",
+  "payload": {
+    "endpoints": [
+      {
+        "url": "https://agent.local",
+        "price": "0.03 CKB"
+      },
+      {
+        "url": "https://agent.backup.local",
+        "price": "0.05 CKB"
+      }
+    ],
+    "updatedAt": "2026-04-24T06:21:07.276Z"
+  },
+  "deployedAt": "2026-04-24T06:21:22.387Z",
+  "action": "updated",
+  "txHash": "0x84d022a6dbdb652ad4e43785b32b6dccebcae4a876136aa5465f18c4095d21f1",
+  "typeArgs": "0x97ccd767a060fa93b7c9076215160a2fcd5b795834cb9c43e19075acf13561bc",
+  "codeHash": "0xe0d44e3218762577084c92e3a83cac59ba2a10874fc73e828e1a6b624bccfea9",
+  "hashType": "data1",
+  "codeOutPoint": {
+    "txHash": "0x7d14de60f1c4d656c09a397530f47733d68c69f555894547c03ab9536d9c115b",
+    "index": 0
+  },
+  "registryCellOutPoint": {
+    "txHash": "0x84d022a6dbdb652ad4e43785b32b6dccebcae4a876136aa5465f18c4095d21f1",
+    "index": 0
+  }
+}

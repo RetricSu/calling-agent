@@ -1,37 +1,17 @@
-import type { FiberBrowserNode, NodeInfoResult } from "@fiber-pay/sdk/browser";
+import type { UseFiberNodeResult } from "@fiber-pay/react";
 import { AgentEndpointSelector } from "./AgentEndpointSelector";
-import { ConnectButton } from "./ConnectButton";
+import { ConnectButton } from "@fiber-pay/react";
 
 export interface HeaderProps {
-  node: FiberBrowserNode | null;
-  nodeInfo: NodeInfoResult | null;
-  error: string | null;
-  isPasskeySupported: boolean;
-  passkeyUnavailableReason: string | null;
-  hasPasskeyConfigured: boolean;
-  isStarting: boolean;
-  isRunning: boolean;
+  fiber: UseFiberNodeResult;
   agentUrl: string;
   onAgentUrlChange: (url: string) => void;
-  onRegisterPasskey: () => void;
-  onConnectPasskey: () => void;
-  onDisconnect: () => void;
 }
 
 export function Header({
-  node,
-  nodeInfo,
-  error,
-  isPasskeySupported,
-  passkeyUnavailableReason,
-  hasPasskeyConfigured,
-  isStarting,
-  isRunning,
+  fiber,
   agentUrl,
   onAgentUrlChange,
-  onRegisterPasskey,
-  onConnectPasskey,
-  onDisconnect,
 }: HeaderProps) {
   return (
     <header className="sticky top-0 z-50 w-full border-b border-[var(--border-default)] bg-[var(--bg-primary)]/80 backdrop-blur-md">
@@ -60,19 +40,7 @@ export function Header({
 
         <AgentEndpointSelector value={agentUrl} onChange={onAgentUrlChange} />
 
-        <ConnectButton
-          node={node}
-          nodeInfo={nodeInfo}
-          error={error}
-          isPasskeySupported={isPasskeySupported}
-          passkeyUnavailableReason={passkeyUnavailableReason}
-          hasPasskeyConfigured={hasPasskeyConfigured}
-          isStarting={isStarting}
-          isRunning={isRunning}
-          onRegisterPasskey={onRegisterPasskey}
-          onConnectPasskey={onConnectPasskey}
-          onDisconnect={onDisconnect}
-        />
+        <ConnectButton fiber={fiber} />
       </div>
     </header>
   );
