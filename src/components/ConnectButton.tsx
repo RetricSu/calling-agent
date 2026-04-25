@@ -146,15 +146,77 @@ export function ConnectButton({
   const [statsError, setStatsError] = useState<string | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
 
-  const [peerAddress, setPeerAddress] = useState("/dns4/bottle.fiber.channel/tcp/443/wss/p2p/QmXen3eUHhywmutEzydCsW4hXBoeVmdET2FJvMX69XJ1Eo");
+  const DEFAULT_PEER_ADDRESS = "/dns4/bottle.fiber.channel/tcp/443/wss/p2p/QmXen3eUHhywmutEzydCsW4hXBoeVmdET2FJvMX69XJ1Eo";
+const DEFAULT_PEER_ID = "QmXen3eUHhywmutEzydCsW4hXBoeVmdET2FJvMX69XJ1Eo";
+
+const [peerAddress, setPeerAddress] = useState(DEFAULT_PEER_ADDRESS);
   const [fundingAmount, setFundingAmount] = useState("1000");
   const [peerActionLoading, setPeerActionLoading] = useState(false);
   const [peerActionMsg, setPeerActionMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   const channelPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const peerActionHideRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoConnectDoneRef = useRef(false);
+
+  const [routeCheck, setRouteCheck] = useState<"unknown" | "has-route" | "no-route">("unknown");
+  const [autoConnectStatus, setAutoConnectStatus] = useState<string | null>(null);
 
   const hasError = !!error;
+
+  useEffect(() => {
+    if (!node || !isRunning || autoConnectDoneRef.current) return;
+
+    const currentNode = node;
+    let cancelled = false;
+
+    async function runAutoConnect() {
+      autoConnectDoneRef.current = true;
+      setAutoConnectStatus("Connecting to relay peer...");
+
+      try {
+        await currentNode.connectPeer({ address: DEFAULT_PEER_ADDRESS });
+        if (cancelled) return;
+
+        const peers = await currentNode.listPeers();
+        if (cancelled) return;
+
+        const matched = peers.peers.find((p) => p.address.includes(DEFAULT_PEER_ID));
+        if (!matched) {
+          setAutoConnectStatus("Connected but peer not found in list");
+          return;
+        }
+
+        setAutoConnectStatus("Checking payment route...");
+
+        const result = await currentNode.sendPayment({
+          target_pubkey: matched.pubkey,
+          amount: "0x1",
+          keysend: true,
+          dry_run: true,
+        });
+
+        if (cancelled) return;
+
+        if (result.status !== "Failed") {
+          setRouteCheck("has-route");
+          setAutoConnectStatus("Payment route available");
+        } else {
+          setRouteCheck("no-route");
+          setAutoConnectStatus("No payment route — open a channel to continue");
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setAutoConnectStatus(e instanceof Error ? e.message : "Auto-connect failed");
+        }
+      }
+    }
+
+    void runAutoConnect();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [node, isRunning]);
 
   function setPeerActionFeedback(
     message: { type: "success" | "error"; text: string } | null,
@@ -228,6 +290,9 @@ export function ConnectButton({
   async function handleDisconnect() {
     await onDisconnect();
     setShowDropdown(false);
+    setRouteCheck("unknown");
+    setAutoConnectStatus(null);
+    autoConnectDoneRef.current = false;
   }
 
   async function handleConnectPeer() {
@@ -303,12 +368,28 @@ export function ConnectButton({
       }, 180000);
 
       node.waitForChannelReady(channelId, { timeout: 180000, interval: 5000 })
-        .then(() => {
+        .then(async () => {
           clearTimeout(safetyTimeout);
           clearInterval(uiPoll);
           channelPollRef.current = null;
           setPeerActionFeedback({ type: "success", text: CHANNEL_STATE_LABELS[ChannelState.ChannelReady] }, 6000);
           setPeerActionLoading(false);
+
+          // Re-check route after channel is ready
+          try {
+            const routeResult = await node.sendPayment({
+              target_pubkey: pubkey as `0x${string}`,
+              amount: "0x1",
+              keysend: true,
+              dry_run: true,
+            });
+            if (routeResult.status !== "Failed") {
+              setRouteCheck("has-route");
+              setAutoConnectStatus("Payment route available");
+            }
+          } catch {
+            // ignore dry_run errors after channel open
+          }
         })
         .catch((err) => {
           clearTimeout(safetyTimeout);
@@ -447,7 +528,55 @@ export function ConnectButton({
                 </>
               )}
 
+              {autoConnectStatus && (
+                <div className={`mt-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs ${routeCheck === "no-route" ? "border border-[var(--warning)]/30 bg-[var(--warning)]/10 text-[var(--warning)]" : "text-[var(--text-secondary)]"}`}>
+                  {autoConnectStatus.endsWith("...") ? (
+                    <svg className="h-3 w-3 animate-spin" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                    </svg>
+                  ) : routeCheck === "has-route" ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="20 6 9 17 4 12" />
+                    </svg>
+                  ) : routeCheck === "no-route" ? (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="12" />
+                      <line x1="12" y1="16" x2="12.01" y2="16" />
+                    </svg>
+                  )}
+                  <span>{autoConnectStatus}</span>
+                </div>
+              )}
+
               <div className="my-3 border-t border-[var(--border-default)]" />
+
+              {routeCheck === "no-route" && (
+                <div className="mb-3 rounded-lg border border-[var(--warning)]/30 bg-[var(--warning)]/10 p-3 text-xs text-[var(--warning)]">
+                  <div className="mb-1 flex items-center gap-1.5 font-medium">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                      <line x1="12" y1="9" x2="12" y2="13" />
+                      <line x1="12" y1="17" x2="12.01" y2="17" />
+                    </svg>
+                    No payment route found
+                  </div>
+                  <p className="mb-2 leading-relaxed opacity-90">
+                    Your node is connected but cannot route payments to the relay. You need to open a channel with this peer to make payments.
+                  </p>
+                  <div className="flex items-center gap-2 rounded bg-[var(--bg-secondary)] px-2 py-1.5 text-[var(--text-secondary)]">
+                    <span className="text-[10px]">Set funding amount and click</span>
+                    <span className="rounded border border-[var(--accent)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">Open</span>
+                    <span className="text-[10px]">below</span>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <div className="text-xs font-medium text-[var(--text-primary)]">Connect / Open Channel</div>
