@@ -308,11 +308,28 @@ async function callAgent(
     const macaroon = challenge.macaroon as string;
     const invoice = challenge.invoice as string;
 
+    // Check if we have a direct route before falling back to trampoline
+    let useTrampoline = true;
+    try {
+      onStatus("Checking payment route...");
+      const routeCheck = await node.sendPayment({
+        invoice,
+        dry_run: true,
+      });
+      // If dry_run is not Failed, we have a route; skip trampoline
+      if (routeCheck.status !== "Failed") {
+        useTrampoline = false;
+      }
+    } catch {
+      // If route check fails, fall back to trampoline
+    }
+
     onStatus("Paying L402 invoice via Fiber...");
-    const payment = await node.sendPayment({
-      invoice,
-      trampoline_hops: [DEFAULT_TRAMPOLINE_HOP],
-    });
+    const payment = await node.sendPayment(
+      useTrampoline
+        ? { invoice, trampoline_hops: [DEFAULT_TRAMPOLINE_HOP] }
+        : { invoice }
+    );
 
     onStatus("Waiting for payment confirmation...");
     const result = await node.waitForPayment(payment.payment_hash, {
