@@ -30,6 +30,22 @@ const CHANNEL_STATE_LABELS: Record<ChannelState, string> = {
   [ChannelState.Closed]: "Closed",
 };
 
+/**
+ * The browser FiberBrowserNode returns raw state names from the WASM adapter
+ * (e.g. "ChannelReady"), which do NOT go through the JSON-RPC client's
+ * `normalizeChannelStateName`. Normalize here so comparisons against
+ * `ChannelState` enum values (SCREAMING_SNAKE_CASE) work consistently.
+ */
+function normalizeChannelState(stateName: string): ChannelState {
+  const normalized = stateName.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  for (const value of Object.values(ChannelState)) {
+    if (value.replace(/[^a-zA-Z0-9]/g, "").toLowerCase() === normalized) {
+      return value as ChannelState;
+    }
+  }
+  return stateName as ChannelState;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -113,13 +129,16 @@ async function fetchSnapshot(
   const relayPeer = peers.peers.find((p) => p.address.includes(DEFAULT_PEER_ID));
   const relayPubkey = relayPeer?.pubkey ?? null;
 
-  const channelSummaries: ChannelSummary[] = channels.channels.map((c) => ({
-    channel_id: c.channel_id,
-    pubkey: c.pubkey,
-    state: c.state.state_name,
-    is_ready: c.state.state_name === ChannelState.ChannelReady,
-    created_at: Number(c.created_at) || 0,
-  }));
+  const channelSummaries: ChannelSummary[] = channels.channels.map((c) => {
+    const state = normalizeChannelState(c.state.state_name as string);
+    return {
+      channel_id: c.channel_id,
+      pubkey: c.pubkey,
+      state,
+      is_ready: state === ChannelState.ChannelReady,
+      created_at: Number(c.created_at) || 0,
+    };
+  });
 
   const channelsToRelay = relayPubkey
     ? channelSummaries.filter((c) => c.pubkey === relayPubkey && c.state !== ChannelState.Closed)
