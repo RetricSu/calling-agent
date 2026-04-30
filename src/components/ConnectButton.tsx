@@ -415,6 +415,17 @@ export function ConnectButton({
     return Number.isFinite(v) ? v + 1 : 1001;
   }, [fundingAmount]);
 
+  const fundingAmountValidation = useMemo<{ valid: boolean; error: string | null }>(() => {
+    const trimmed = fundingAmount.trim();
+    if (!trimmed) return { valid: false, error: null };
+    const v = Number(trimmed);
+    if (!Number.isFinite(v)) return { valid: false, error: "Enter a valid number." };
+    if (v <= 0) return { valid: false, error: "Amount must be greater than 0." };
+    // Fiber channels require a minimum funding; keep a reasonable floor.
+    if (v < 62) return { valid: false, error: "Minimum funding is 62 CKB." };
+    return { valid: true, error: null };
+  }, [fundingAmount]);
+
   const walletDone =
     !!snapshot &&
     (snapshot.externalFunding ||
@@ -763,7 +774,7 @@ export function ConnectButton({
               : "Required to route payments"
           }
         />
-        {(status === "active" || (status === "done" && false)) && (
+        {status === "active" && (
           <div className="ml-7 space-y-2">
             {!channelInProgress && !activeOpen && (
               <>
@@ -782,13 +793,18 @@ export function ConnectButton({
                       openChannelLoading ||
                       !peerDone ||
                       !walletDone ||
-                      !fundingAmount.trim()
+                      !fundingAmountValidation.valid
                     }
                     className="rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-[var(--bg-primary)] transition-micro hover:bg-[var(--accent-dim)] disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {openChannelLoading ? "Opening…" : "Open channel"}
                   </button>
                 </div>
+                {fundingAmountValidation.error && (
+                  <p className="text-[10px] text-[var(--warning)]">
+                    {fundingAmountValidation.error}
+                  </p>
+                )}
                 {!peerDone && (
                   <p className="text-[10px] text-[var(--text-tertiary)]">
                     Connect to peer first.
